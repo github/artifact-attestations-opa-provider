@@ -64,11 +64,13 @@ $ helm install artifact-attestations-opa-provider charts/artifact-attestations-o
 1. Install constraint template and constraint.
 
 ```
-$ kubectl apply -f validation/artifact-attestations-opa-constraint-template.yaml
-$ kubectl apply -f validation/artifact-attestations-opa-constraint.yaml
+$ kubectl apply -f validation/artifact-attestations-constraint-template.yaml
+$ kubectl apply -f validation/artifact-attestations-constraint.yaml
 ```
 
 ### Cleaning up
 
+```
 $ kubectl delete -f validation
 $ helm uninstall external-data-provider -n provider-system
+```

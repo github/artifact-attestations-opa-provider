@@ -39,9 +39,6 @@ func (p *Provider) Validate(r *externaldata.ProviderRequest) *externaldata.Provi
 
 	results := make([]externaldata.Item, 0)
 
-	// get bundles via ref (name.Reference)
-	// https://github.com/github/policy-controller/blob/09dab43394666d59c15ded66aee622097af58b77/pkg/webhook/bundle.go#L96
-
 	// iterate over all keys
 	for _, key := range r.Request.Keys {
 		var res []*verify.VerificationResult
