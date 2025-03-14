@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: artifact-attestations-opa-provider
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      run: artifact-attestations-opa-provider
+  template:
+    metadata:
+      labels:
+        run: artifact-attestations-opa-provider
+    spec:
+      containers:
+      - image: openpolicyagent/gatekeeper-external-data-provider:dev
+        imagePullPolicy: IfNotPresent
+        name: artifact-attestations-opa-provider
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 65532
+          runAsNonRoot: true
+          runAsUser: 65532
+          seccompProfile:
+            type: RuntimeDefault
+        # args:
+        # - --cert-dir={{ .Values.certDir }}
+        # {{- if .Values.clientCAFile }}
+        # - --client-ca-file={{ .Values.clientCAFile }}
+        # {{- end }}
+        # - --port={{ .Values.port }}
+        ports:
+        - containerPort: {{ .Values.port }}
+          protocol: TCP
+        {{- if .Values.clientCAFile }}
+        volumeMounts:
+        - name: gatekeeper-ca-cert
+          mountPath: /tmp/gatekeeper
+          readOnly: true
+        {{- end }}
+      restartPolicy: Always
+      nodeSelector:
+        kubernetes.io/os: linux
+      {{- if .Values.clientCAFile }}
+      volumes:
+      - name: gatekeeper-ca-cert
+        secret:
+          secretName: gatekeeper-webhook-server-cert
+          items:
+          - key: ca.crt
+            path: ca.crt
+      {{- end }}

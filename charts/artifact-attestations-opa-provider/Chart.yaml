@@ -1,0 +1,8 @@
+apiVersion: v2
+description: Helm chart for GitHub Artifact Attestations opa provider
+name: artifact-attestations-opa-provider
+version: 0.0.2
+home: https://github.com/github/artifact-attestations-opa-provider
+sources:
+  - https://github.com/github/artifact-attestations-opa-provider.git
+appVersion: 0.0.2

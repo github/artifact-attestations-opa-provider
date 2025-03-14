@@ -1,0 +1,8 @@
+apiVersion: externaldata.gatekeeper.sh/v1beta1
+kind: Provider
+metadata:
+  name: artifact-attestations-opa-provider
+spec:
+  url: https://artifact-attestations-opa-provider.{{ .Release.Namespace }}:{{ .Values.port }}
+  timeout: {{ .Values.provider.timeout }}
+  caBundle: {{ required "You must provide .Values.provider.tls.caBundle" .Values.provider.tls.caBundle }}
