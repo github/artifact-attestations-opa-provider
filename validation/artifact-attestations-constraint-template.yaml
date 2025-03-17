@@ -1,12 +1,12 @@
 apiVersion: templates.gatekeeper.sh/v1
 kind: ConstraintTemplate
 metadata:
-  name: k8sexternaldatavalidation
+  name: k8sexternaldatabuildprovenance
 spec:
   crd:
     spec:
       names:
-        kind: K8sExternalDataValidation
+        kind: K8sExternalDataBuildProvenance
   targets:
     - target: admission.k8s.gatekeeper.sh
       rego: |
@@ -22,7 +22,6 @@ spec:
           response := external_data({"provider": "artifact-attestations-opa-provider", "keys": images})
 
           response_with_error(response)
-          no_signature(response)
 
           msg := sprintf("invalid response: %v", [response])
         }
@@ -35,4 +34,15 @@ spec:
 
         response_with_error(response) {
           count(response.system_error) > 0
+        }
+
+        response_with_error(response) {
+          not signed(response)
+        }
+
+        signed(response) {
+          resps := response.responses[_]
+          bundle := resps[1]
+          bundle.mediaType == "application/vnd.dev.sigstore.verificationresult+json;version=0.1"
+          # bundle[0].signature.certificate.githubWorkflowRepository == "github.com/kommendorkapten"
         }
