@@ -13,6 +13,8 @@ spec:
         package k8sexternaldata
 
         violation[{"msg": msg}] {
+
+
           # build a list of keys containing images
           images := [img | img = input.review.object.spec.containers[_].image]
 
@@ -20,6 +22,7 @@ spec:
           response := external_data({"provider": "artifact-attestations-opa-provider", "keys": images})
 
           response_with_error(response)
+          no_signature(response)
 
           msg := sprintf("invalid response: %v", [response])
         }
@@ -27,7 +30,7 @@ spec:
         response_with_error(response) {
           count(response.errors) > 0
           errs := response.errors[_]
-          contains(errs[1], "_invalid")
+          contains(errs[1], "_unsigned")
         }
 
         response_with_error(response) {

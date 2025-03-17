@@ -2,6 +2,6 @@ certDir: /certs
 clientCAFile: /tmp/gatekeeper/ca.crt
 port: 8090
 provider:
-  timeout: 1
+  timeout: 5
   tls:
     caBundle: ""

@@ -3,7 +3,6 @@ package verifier
 import (
 	"crypto/x509"
 	"fmt"
-	"errors"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
@@ -25,7 +24,7 @@ func NewMulti(v map[string]*Verifier) *Multi {
 	}
 }
 
-func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash, signer, issuer string) ([]*verify.VerificationResult, error) {
+func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.VerificationResult, error) {
 	var res = []*verify.VerificationResult{}
 
 	for _, b := range bundles {
@@ -46,15 +45,11 @@ func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash, signer, issuer stri
 			continue
 		}
 
-		if r, err = v.Verify(b, h, signer, issuer); err == nil {
+		if r, err = v.Verify(b, h); err == nil {
 			res = append(res, r)
 		} else {
 			fmt.Println(err)
 		}
-	}
-
-	if len(res) == 0 {
-		return nil, errors.New("no bundles verified")
 	}
 
 	return res, nil

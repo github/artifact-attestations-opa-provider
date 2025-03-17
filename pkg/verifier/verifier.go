@@ -84,7 +84,7 @@ func GHVerifier(stamp string) (*Verifier, error) {
 	)
 }
 
-func (v *Verifier) Verify(b *bundle.Bundle, h *v1.Hash, signer, issuer string) (*verify.VerificationResult, error) {
+func (v *Verifier) Verify(b *bundle.Bundle, h *v1.Hash) (*verify.VerificationResult, error) {
 	var po = []verify.PolicyOption{
 		verify.WithoutIdentitiesUnsafe(),
 	}

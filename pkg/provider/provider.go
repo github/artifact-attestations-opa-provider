@@ -18,7 +18,7 @@ const (
 )
 
 type Verifier interface {
-	Verify(bundles []*bundle.Bundle, h *v1.Hash, signer, issuer string) ([]*verify.VerificationResult, error)
+	Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.VerificationResult, error)
 }
 
 type Provider struct {
@@ -48,39 +48,37 @@ func (p *Provider) Validate(r *externaldata.ProviderRequest) *externaldata.Provi
 
 		fmt.Println("verify signature for:", key)
 		if ref, err = name.ParseReference(key); err != nil{
+			fmt.Printf("error parsing reference: %s\n", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: ParseReference(%q): %v", key, err))
 		}
-		fmt.Printf("ref: %+v\n", ref)
 
 		b, h, err := fetcher.BundleFromName(ref, remoteOpts)
 		if err != nil {
+			fmt.Printf("error fetching bundles: %s\n", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: FromBundle(%q): %v", key, err))
 		}
 
-		var issuer = ""
-		var signer = ""
-		if res, err = p.v.Verify(b, h, issuer, signer); err != nil {
+		if res, err = p.v.Verify(b, h); err != nil {
+			fmt.Printf("error calling verify: %s\n", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: VerifyImageSignatures(%q): %v", key, err))
 		}
 
-		fmt.Println(res)
-
-		// var checkedSignatures []oci.Signature
-		var checkedSignatures = []struct{}{}
-		var bundleVerified = false
-
+		var bundleVerified = len(res) > 0
 		if bundleVerified {
 			fmt.Println("signature verified for:", key)
-			fmt.Printf("%d number of valid signatures found for %s, found signatures: %v\n", len(checkedSignatures), key, checkedSignatures)
+			fmt.Printf("%d number of valid signatures found for %s, found signatures: %v\n",
+				len(res),
+				key,
+				res)
 			results = append(results, externaldata.Item{
 				Key:   key,
-				Value: key + "_valid",
+				Value: res,
 			})
 		} else {
 			fmt.Printf("no valid signatures found for: %s\n", key)
 			results = append(results, externaldata.Item{
 				Key:   key,
-				Error: key + "_invalid",
+				Error: key + "_unsigned",
 			})
 		}
 	}

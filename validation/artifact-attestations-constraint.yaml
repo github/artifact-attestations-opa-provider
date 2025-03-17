@@ -1,10 +1,12 @@
 apiVersion: constraints.gatekeeper.sh/v1beta1
 kind: K8sExternalDataValidation
 metadata:
-  name: deny-images-with-invalid-suffix
+  name: require-build-provenance
 spec:
   enforcementAction: deny
   match:
     kinds:
       - apiGroups: ["*"]
         kinds: ["Pod"]
+    excludedNamespaces: ["provider-system"]
+    namespaces: ["default"]

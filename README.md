@@ -28,10 +28,10 @@ the images are valid by verifying its signatures.
 
 ```
 # Add the Gatekeeper Helm repository
-helm repo add gatekeeper https://open-policy-agent.github.io/gatekeeper/charts
+$ helm repo add gatekeeper https://open-policy-agent.github.io/gatekeeper/charts
 
 # Install the latest version of Gatekeeper with the external data feature enabled.
-helm install gatekeeper/gatekeeper \
+$ helm install gatekeeper/gatekeeper \
     --set enableExternalData=true \
     --name-template=gatekeeper \
     --namespace gatekeeper-system \
@@ -72,5 +72,5 @@ $ kubectl apply -f validation/artifact-attestations-constraint.yaml
 
 ```
 $ kubectl delete -f validation
-$ helm uninstall external-data-provider -n provider-system
+$ helm uninstall artifact-attestations-opa-provider -n provider-system
 ```

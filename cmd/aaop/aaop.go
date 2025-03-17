@@ -112,6 +112,8 @@ func (t *transport) validate(w http.ResponseWriter, r *http.Request) {
 }
 
 func sendResponse(w http.ResponseWriter, r *externaldata.ProviderResponse) {
+	fmt.Printf("resp: %+v\n", r)
+
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(r); err != nil {
 		panic(err)
