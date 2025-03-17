@@ -37,12 +37,9 @@ spec:
         }
 
         response_with_error(response) {
-          not signed(response)
+          not signed(response, "kommendorkapten/ghademo")
         }
 
-        signed(response) {
-          resps := response.responses[_]
-          bundle := resps[1]
-          bundle.mediaType == "application/vnd.dev.sigstore.verificationresult+json;version=0.1"
-          # bundle[0].signature.certificate.githubWorkflowRepository == "github.com/kommendorkapten"
+        signed(resp, repo) {
+          resp.responses[_][_][_].signature.certificate.githubWorkflowRepository == repo
         }
