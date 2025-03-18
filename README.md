@@ -1,4 +1,4 @@
-# GitHub Artifact Attestation APA Provider
+# GitHub Artifact Attestations OPA Provider
 To integrate [OPA Gatekeeper's new ExternalData
 feature](https://open-policy-agent.github.io/gatekeeper/website/docs/externaldata)
 with [Artifact attestations](https://github.com/actions/attest) to determine whether
@@ -8,12 +8,11 @@ the images are valid by verifying its signatures.
 
 * mTLS between OPA Gatekeeper and the external data provider is not
   yet implemented, only server side TLS
-* No custom TUF roots; only PGI Sigstore and GitHub's Sigstore
-  instance is supported
 * No offline mode; the external data provider requires access to the
   used TUF repositories to be able to update the trust root
 * Live refreshes of the trust root, the trust root is downloaded upon
   start and is not refreshed
+* Fix up Helm templates
 
 ## Installation
 
@@ -66,6 +65,18 @@ $ helm install artifact-attestations-opa-provider charts/artifact-attestations-o
 ```
 $ kubectl apply -f validation/artifact-attestations-constraint-template.yaml
 $ kubectl apply -f validation/artifact-attestations-constraint.yaml
+```
+
+1. Test with an image from wrong repository.
+
+```
+$ kubectl run nginx --image=ghcr.io/tinaheidinger/test-container:latest  --dry-run=server -ojson
+```
+
+1. Correctly signed
+
+```
+$ kubectl run nginx --image=ghcr.io/kommendorkapten/ghademo:latest --dry-run=server -ojson
 ```
 
 ### Cleaning up

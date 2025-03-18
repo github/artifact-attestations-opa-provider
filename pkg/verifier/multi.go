@@ -45,7 +45,7 @@ func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verifica
 			continue
 		}
 
-		if r, err = v.Verify(b, h); err == nil {
+		if r, err = v.VerifyOne(b, h); err == nil {
 			res = append(res, r)
 		} else {
 			fmt.Println(err)

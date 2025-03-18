@@ -65,16 +65,16 @@ func PGIVerifier() (*Verifier, error) {
 	)
 }
 
-func GHVerifier(stamp string) (*Verifier, error) {
+func GHVerifier(td string) (*Verifier, error) {
 	var target string
 	var vo = []verify.VerifierOption{
 		verify.WithSignedTimestamps(1),
 	}
 
-	if stamp == "" || stamp == "dotcom" {
+	if td == "" || td == "dotcom" {
 		target = defaultTR
 	} else {
-		target = fmt.Sprintf("%s.%s", stamp, defaultTR)
+		target = fmt.Sprintf("%s.%s", td, defaultTR)
 	}
 
 	return New(githubRoot,
@@ -84,7 +84,24 @@ func GHVerifier(stamp string) (*Verifier, error) {
 	)
 }
 
-func (v *Verifier) Verify(b *bundle.Bundle, h *v1.Hash) (*verify.VerificationResult, error) {
+func (v *Verifier) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.VerificationResult, error) {
+	var res = []*verify.VerificationResult{}
+	var err error
+
+	for _, b := range bundles {
+		var r *verify.VerificationResult
+
+		if r, err = v.VerifyOne(b, h); err == nil {
+			res = append(res, r)
+		} else {
+			fmt.Println(err)
+		}
+	}
+
+	return res, nil
+}
+
+func (v *Verifier) VerifyOne(b *bundle.Bundle, h *v1.Hash) (*verify.VerificationResult, error) {
 	var po = []verify.PolicyOption{
 		verify.WithoutIdentitiesUnsafe(),
 	}

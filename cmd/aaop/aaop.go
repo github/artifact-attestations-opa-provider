@@ -1,23 +1,27 @@
 package main
 
 import (
-	"path/filepath"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
+
+	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
+	"github.com/sigstore/sigstore-go/pkg/verify"
 
 	"github.com/github/artifact-attestations-opa-provider/pkg/provider"
 	"github.com/github/artifact-attestations-opa-provider/pkg/verifier"
-
-	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
 )
 
 var (
 	noPGI       = flag.Bool("no-public-good", false, "disable public good sigstore instance")
 	trustDomain = flag.String("trust-domain", "", "trust domain to use")
+	tufRepo     = flag.String("tuf-repo", "", "URL to TUF repository")
+	tufRoot     = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
 )
 
 const (
@@ -31,34 +35,23 @@ type transport struct {
 }
 
 func main() {
-	var mv = verifier.Multi{
-		V: map[string]*verifier.Verifier{},
-	}
-	var v *verifier.Verifier
+	var v provider.Verifier
 	var err error
+
 	flag.Parse()
 
-	fmt.Println("starting server...")
-
-	// only load PGI if no tenant's trust domain is selected
-	if !*noPGI && *trustDomain == "" {
-		if v, err = verifier.PGIVerifier(); err != nil {
-			panic(err)
-		}
-		mv.V[verifier.PublicGoodIssuer] = v
+	if *tufRepo != "" && *tufRoot != "" {
+		v = loadCustomVerifier(*tufRepo, *tufRoot, *trustDomain)
+	} else {
+		v = loadVerifier(!*noPGI, *trustDomain)
 	}
 
-	if v, err = verifier.GHVerifier(*trustDomain); err != nil {
-		panic(err)
-	}
-	mv.V[verifier.GitHubIssuer] = v
-
-	var p = provider.New(&mv)
+	var p = provider.New(v)
 	var t = transport{
 		p: p,
 	}
 
-	srv := &http.Server{
+	var srv = &http.Server{
 		Addr:              ":8090",
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -69,11 +62,65 @@ func main() {
 	var cf = filepath.Join(certsDir, certName)
 	var kf = filepath.Join(certsDir, keyName)
 
-	if err := srv.ListenAndServeTLS(cf, kf); err != nil {
+	fmt.Println("starting server...")
+	if err = srv.ListenAndServeTLS(cf, kf); err != nil {
 		panic(err)
 	}
 }
 
+// loadCustomVerifier loads a user provided TUF root.
+// Currently only verificatoin options with RFC3161 signed timestamps
+// are supported
+func loadCustomVerifier(repo, root, td string) provider.Verifier {
+	var rb []byte
+	var v *verifier.Verifier
+	var vo = []verify.VerifierOption{
+		verify.WithSignedTimestamps(1),
+	}
+	var err error
+
+	if rb, err = os.ReadFile(root); err != nil {
+		panic(err)
+	}
+
+	if v, err = verifier.New(rb, repo, td, vo); err != nil {
+		panic(err)
+	}
+
+	return v
+}
+
+// loadVerfier returns the default verifiers. If pgi is true and tr is
+// the empty string, pgi and gh verifiers are returned.
+// if the provided trust domain is set, only gh verifier is returend,
+// with the set trust domain
+func loadVerifier(pgi bool, td string) provider.Verifier {
+	var mv = verifier.Multi{
+		V: map[string]*verifier.Verifier{},
+	}
+	var v *verifier.Verifier
+	var err error
+
+	// only load PGI if no tenant's trust domain is selected
+	if pgi && td == "" {
+		if v, err = verifier.PGIVerifier(); err != nil {
+			panic(err)
+		}
+		mv.V[verifier.PublicGoodIssuer] = v
+		fmt.Println("loaded verfier for public good Sigstore")
+	}
+
+	if v, err = verifier.GHVerifier(td); err != nil {
+		panic(err)
+	}
+	mv.V[verifier.GitHubIssuer] = v
+	fmt.Println("loaded verfier for GitHub Sigstore")
+
+	return &mv
+}
+
+// validate intercepts an external data request from OPA Gatekeeper to
+// validate a pod.
 func (t *transport) validate(w http.ResponseWriter, r *http.Request) {
 	var resp *externaldata.ProviderResponse
 
@@ -101,18 +148,19 @@ func (t *transport) validate(w http.ResponseWriter, r *http.Request) {
 	// ctx := req.Context()
 	// ro := options.RegistryOptions{}
 	// co, err := ro.ClientOpts(ctx)
-
-	fmt.Printf("req: %+v\n", providerRequest)
-
 	resp = t.p.Validate(&providerRequest)
-
-	fmt.Printf("resp: %+v\n", resp)
 
 	sendResponse(w, resp)
 }
 
 func sendResponse(w http.ResponseWriter, r *externaldata.ProviderResponse) {
-	fmt.Printf("resp: %+v\n", r)
+	var msg = fmt.Sprintf("writing response: items %d", len(r.Response.Items))
+	if r.Response.SystemError != "" {
+		msg = fmt.Sprintf("%s, systemerror '%s'",
+			msg,
+			r.Response.SystemError)
+	}
+	fmt.Printf("%s\n", msg)
 
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(r); err != nil {
