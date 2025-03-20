@@ -48,7 +48,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 	var err error
 
 	if kc, err = p.kc.KeyChain(ctx); err != nil {
-		fmt.Printf("provier::validate error retrieving key chain: %s\n", err)
+		fmt.Printf("provider::validate error retrieving key chain: %s\n", err)
 		return ErrorResponse(fmt.Sprintf("ERROR: KeyChain: %s", err))
 	}
 	var ro = fetcher.GetRemoteOptions(ctx, kc)
@@ -58,26 +58,26 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		var res []*verify.VerificationResult
 		var ref name.Reference
 
-		fmt.Println("provier::validate verify signature for:", key)
+		fmt.Println("provider::validate verify signature for:", key)
 		if ref, err = name.ParseReference(key); err != nil {
-			fmt.Printf("provier::validate error parsing reference: %s\n", err)
+			fmt.Printf("provider::validate error parsing reference: %s\n", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: ParseReference(%q): %v", key, err))
 		}
 
 		b, h, err := fetcher.BundleFromName(ref, ro)
 		if err != nil {
-			fmt.Printf("provier::validate error fetching bundles: %s\n", err)
+			fmt.Printf("provider::validate error fetching bundles: %s\n", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: FromBundle(%q): %v", key, err))
 		}
 
 		if res, err = p.v.Verify(b, h); err != nil {
-			fmt.Printf("provier::validate error calling verify: %s\n", err)
+			fmt.Printf("provider::validate error calling verify: %s\n", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: VerifyImageSignatures(%q): %v", key, err))
 		}
 
 		var bundleVerified = len(res) > 0
 		if bundleVerified {
-			fmt.Printf("provier::validate %d valid signatures found for %s\n",
+			fmt.Printf("provider::validate %d valid signatures found for %s\n",
 				len(res),
 				key)
 			results = append(results, externaldata.Item{
@@ -85,7 +85,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				Value: res,
 			})
 		} else {
-			fmt.Printf("provier::validate no valid signatures found for: %s\n", key)
+			fmt.Printf("provider::validate no valid signatures found for: %s\n", key)
 			results = append(results, externaldata.Item{
 				Key:   key,
 				Error: key + "_unsigned",
