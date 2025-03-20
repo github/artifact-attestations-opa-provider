@@ -76,7 +76,7 @@ func main() {
 
 // loadCustomVerifier loads a user provided TUF root.
 // Currently only verificatoin options with RFC3161 signed timestamps
-// are supported
+// are supported.
 func loadCustomVerifier(repo, root, td string) provider.Verifier {
 	var rb []byte
 	var v *verifier.Verifier
@@ -99,7 +99,7 @@ func loadCustomVerifier(repo, root, td string) provider.Verifier {
 // loadVerfier returns the default verifiers. If pgi is true and tr is
 // the empty string, pgi and gh verifiers are returned.
 // if the provided trust domain is set, only gh verifier is returend,
-// with the set trust domain
+// with the set trust domain.
 func loadVerifier(pgi bool, td string) provider.Verifier {
 	var mv = verifier.Multi{
 		V: map[string]*verifier.Verifier{},

@@ -5,13 +5,14 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/tuf"
 	"github.com/sigstore/sigstore-go/pkg/verify"
 )
 
+// Verifier verifies Sigstore bundles for OCI images.
 type Verifier struct {
 	c  *tuf.Client
 	tr *root.TrustedRoot
@@ -27,6 +28,9 @@ const (
 //go:embed embed/tuf-repo.github.com/root.json
 var githubRoot []byte
 
+// New initializes a new Verifier for the provided TUF repository and
+// verifier options. Note that the target for the trusted_root must be
+// provided.
 func New(rb []byte, tr, tgt string, vo []verify.VerifierOption) (*Verifier, error) {
 	var v Verifier
 	var b []byte
@@ -51,6 +55,11 @@ func New(rb []byte, tr, tgt string, vo []verify.VerifierOption) (*Verifier, erro
 	return &v, nil
 }
 
+// PGIVerifier is a helper method to initialized a Verifier for Sigstore
+// Public Good Instance with the following verification options:
+// * Require SCT.
+// * Require at least one transparency log entry.
+// * Require at least one observed timestamp.
 func PGIVerifier() (*Verifier, error) {
 	var vo = []verify.VerifierOption{
 		verify.WithSignedCertificateTimestamps(1),
@@ -65,6 +74,11 @@ func PGIVerifier() (*Verifier, error) {
 	)
 }
 
+// GHVerifier is a helper method to initialize a verifier for GitHub's
+// Sigstore instance with the following verification options:
+// * Require a RFC3161 signed timestamp.
+// If the default trust domain is wanted, provide the empty string or
+// "dotcom". For other domains, provide the name of the trust domain.
 func GHVerifier(td string) (*Verifier, error) {
 	var target string
 	var vo = []verify.VerifierOption{
@@ -84,6 +98,8 @@ func GHVerifier(td string) (*Verifier, error) {
 	)
 }
 
+// Verify iterates of the provided bundles and returns a set of verification
+// results using VerifyOne.
 func (v *Verifier) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.VerificationResult, error) {
 	var res = []*verify.VerificationResult{}
 	var err error
@@ -101,6 +117,8 @@ func (v *Verifier) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verif
 	return res, nil
 }
 
+// VerifyOne verifies a single bundle against an OCI image's digest.
+// No verification of the signer's identity is made.
 func (v *Verifier) VerifyOne(b *bundle.Bundle, h *v1.Hash) (*verify.VerificationResult, error) {
 	var po = []verify.PolicyOption{
 		verify.WithoutIdentitiesUnsafe(),

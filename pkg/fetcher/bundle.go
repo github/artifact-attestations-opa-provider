@@ -2,6 +2,7 @@ package fetcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,20 +11,21 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 )
 
 var (
+	// UserAgentString to use when accessing remote OCI registries.
 	UserAgentString = fmt.Sprintf("artifact-attestations-opa-provider/%s (%s; %s)",
 		"dev",
 		runtime.GOOS,
 		runtime.GOARCH)
 )
 
-// TODO: isn't there an update to remote that remedies the need for this
-// workaround?
+// https://github.com/google/go-containerregistry/pull/2026
+// this may be solved upstream.
 type noncompliantRegistryTransport struct{}
 
 // RoundTrip will check if a request and associated response fulfill the following:
@@ -35,7 +37,7 @@ type noncompliantRegistryTransport struct{}
 // by this code attempts to make a request to the referrers API.
 // The go-containerregistry library can handle 404 response but not a 406 response.
 // See the related go-containerregistry issue: https://github.com/google/go-containerregistry/issues/1962
-func (a *noncompliantRegistryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (*noncompliantRegistryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := http.DefaultTransport.RoundTrip(req)
 	if resp.StatusCode == http.StatusNotAcceptable && strings.Contains(req.URL.Path, "/referrers/") {
 		resp.StatusCode = http.StatusNotFound
@@ -44,6 +46,8 @@ func (a *noncompliantRegistryTransport) RoundTrip(req *http.Request) (*http.Resp
 	return resp, err
 }
 
+// BundleFromName fetches a sigstore bundle for a container from
+// a registry.
 // This is copied from
 // https://github.com/github/policy-controller/blob/09dab43394666d59c15ded66aee622097af58b77/pkg/webhook/bundle.go#L125
 func BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
@@ -96,11 +100,13 @@ func BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.B
 		bundles = append(bundles, b)
 	}
 	if len(bundles) == 0 {
-		return nil, nil, fmt.Errorf("no bundle found in referrers")
+		return nil, nil, errors.New("no bundle found in referrers")
 	}
 	return bundles, &desc.Digest, nil
 }
 
+// GetRemoteOptions returns the options to provide when accessing remote
+// OCI registries.
 func GetRemoteOptions(ctx context.Context, kc authn.Keychain) []remote.Option {
 	var opts = []remote.Option{
 		remote.WithContext(ctx),
