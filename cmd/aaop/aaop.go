@@ -50,8 +50,7 @@ func main() {
 		v = loadVerifier(!*noPGI, *trustDomain)
 	}
 
-	kc = authn.NewKeyChainProvider(*ns,
-		[]string{*ips})
+	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
 	var p = provider.New(v, kc)
 	var t = transport{
 		p: p,
