@@ -36,6 +36,18 @@ $ kubectl create secret docker-registry \
           --docker-email=$YOUR_EMAIL
 ```
 
+1. Prepare a pull secret for the OPA external data provider (Optional)
+
+```
+$ kubectl create secret \
+          -n provider-system \
+          docker-registry aa-ghcr-login-secret \
+          --docker-server=https://ghcr.io \
+          --docker-username=$YOUR_GITHUB_USERNAME \
+          --docker-password=$YOUR_GITHUB_TOKEN \
+          --docker-email=$YOUR_EMAIL
+```
+
 1. Install Gatekeeper and **enable external data feature**
 
 ```
@@ -97,6 +109,4 @@ $ kubectl run nginx --image=ghcr.io/kommendorkapten/ghademo:latest --dry-run=ser
 ```
 $ kubectl delete -f validation
 $ helm uninstall artifact-attestations-opa-provider -n provider-system
-$ kubectl delete -f binding.yaml
-$ kubectl delete -f role.yaml
 ```
