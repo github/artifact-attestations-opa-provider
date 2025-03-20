@@ -4,8 +4,7 @@ on:
   push:
     branches:
       - main
-  pull_request:
-      - "**.go"
+  pull_request: {}
 
 permissions:
   contents: read
