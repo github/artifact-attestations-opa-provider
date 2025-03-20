@@ -13,6 +13,7 @@ import (
 	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
 	"github.com/sigstore/sigstore-go/pkg/verify"
 
+	"github.com/github/artifact-attestations-opa-provider/pkg/authn"
 	"github.com/github/artifact-attestations-opa-provider/pkg/provider"
 	"github.com/github/artifact-attestations-opa-provider/pkg/verifier"
 )
@@ -22,6 +23,8 @@ var (
 	trustDomain = flag.String("trust-domain", "", "trust domain to use")
 	tufRepo     = flag.String("tuf-repo", "", "URL to TUF repository")
 	tufRoot     = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
+	ns          = flag.String("namespace", "", "namespace the pod runs in")
+	ips         = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registrires")
 )
 
 const (
@@ -35,6 +38,7 @@ type transport struct {
 }
 
 func main() {
+	var kc *authn.KeyChainProvider
 	var v provider.Verifier
 	var err error
 
@@ -46,7 +50,9 @@ func main() {
 		v = loadVerifier(!*noPGI, *trustDomain)
 	}
 
-	var p = provider.New(v)
+	kc = authn.NewKeyChainProvider(*ns,
+		[]string{*ips})
+	var p = provider.New(v, kc)
 	var t = transport{
 		p: p,
 	}
@@ -145,10 +151,7 @@ func (t *transport) validate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ctx := req.Context()
-	// ro := options.RegistryOptions{}
-	// co, err := ro.ClientOpts(ctx)
-	resp = t.p.Validate(&providerRequest)
+	resp = t.p.Validate(r.Context(), &providerRequest)
 
 	sendResponse(w, resp)
 }

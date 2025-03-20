@@ -1,0 +1,9 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: provider-system
+  name: opa-provider
+rules:
+- apiGroups: [""]
+  resources: ["secrets", "serviceaccounts"]
+  verbs: ["get", "list"]

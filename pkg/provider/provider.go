@@ -1,11 +1,12 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/verify"
@@ -21,30 +22,41 @@ type Verifier interface {
 	Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.VerificationResult, error)
 }
 
-type Provider struct {
-	v Verifier
+type KeyChainProvider interface {
+	KeyChain(ctx context.Context) (authn.Keychain, error)
 }
 
-func New(v Verifier) *Provider {
+type Provider struct {
+	v  Verifier
+	kc KeyChainProvider
+}
+
+func New(v Verifier, k KeyChainProvider) *Provider {
 	return &Provider{
-		v: v,
+		v:  v,
+		kc: k,
 	}
 }
 
-func (p *Provider) Validate(r *externaldata.ProviderRequest) *externaldata.ProviderResponse {
+func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest) *externaldata.ProviderResponse {
+	var results = []externaldata.Item{}
 	var resp = externaldata.ProviderResponse{
 		APIVersion: apiVersion,
 		Kind:       "ProviderResponse",
 	}
+	var kc authn.Keychain
+	var err error
 
-	results := make([]externaldata.Item, 0)
+	if kc, err = p.kc.KeyChain(ctx); err != nil {
+		fmt.Printf("provier::validate error retrieving key chain: %s\n", err)
+		return ErrorResponse(fmt.Sprintf("ERROR: KeyChain: %s", err))
+	}
+	var ro = fetcher.GetRemoteOptions(ctx, kc)
 
 	// iterate over all keys
 	for _, key := range r.Request.Keys {
 		var res []*verify.VerificationResult
 		var ref name.Reference
-		var remoteOpts = []remote.Option{}
-		var err error
 
 		fmt.Println("provier::validate verify signature for:", key)
 		if ref, err = name.ParseReference(key); err != nil {
@@ -52,7 +64,7 @@ func (p *Provider) Validate(r *externaldata.ProviderRequest) *externaldata.Provi
 			return ErrorResponse(fmt.Sprintf("ERROR: ParseReference(%q): %v", key, err))
 		}
 
-		b, h, err := fetcher.BundleFromName(ref, remoteOpts)
+		b, h, err := fetcher.BundleFromName(ref, ro)
 		if err != nil {
 			fmt.Printf("provier::validate error fetching bundles: %s\n", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: FromBundle(%q): %v", key, err))

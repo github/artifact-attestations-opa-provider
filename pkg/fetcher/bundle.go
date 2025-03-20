@@ -1,16 +1,25 @@
 package fetcher
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
 	"strings"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-
 	"github.com/sigstore/sigstore-go/pkg/bundle"
+)
+
+var (
+	UserAgentString = fmt.Sprintf("artifact-attestations-opa-provider/%s (%s; %s)",
+		"dev",
+		runtime.GOOS,
+		runtime.GOARCH)
 )
 
 // TODO: isn't there an update to remote that remedies the need for this
@@ -90,4 +99,14 @@ func BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.B
 		return nil, nil, fmt.Errorf("no bundle found in referrers")
 	}
 	return bundles, &desc.Digest, nil
+}
+
+func GetRemoteOptions(ctx context.Context, kc authn.Keychain) []remote.Option {
+	var opts = []remote.Option{
+		remote.WithContext(ctx),
+		remote.WithUserAgent(UserAgentString),
+		remote.WithAuthFromKeychain(kc),
+	}
+
+	return opts
 }

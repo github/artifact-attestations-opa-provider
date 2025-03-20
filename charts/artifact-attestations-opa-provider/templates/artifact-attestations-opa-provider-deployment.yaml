@@ -13,8 +13,10 @@ spec:
       labels:
         run: artifact-attestations-opa-provider
     spec:
+      serviceAccountName: opa-provider
+      automountServiceAccountToken: true
       containers:
-      - image: openpolicyagent/gatekeeper-external-data-provider:dev
+      - image: github/artifact-attestations-opa-provider:dev
         imagePullPolicy: IfNotPresent
         name: artifact-attestations-opa-provider
         securityContext:
@@ -28,12 +30,9 @@ spec:
           runAsUser: 65532
           seccompProfile:
             type: RuntimeDefault
-        # args:
-        # - --cert-dir={{ .Values.certDir }}
-        # {{- if .Values.clientCAFile }}
-        # - --client-ca-file={{ .Values.clientCAFile }}
-        # {{- end }}
-        # - --port={{ .Values.port }}
+        args:
+        - -namespace=provider-system
+        - -image-pull-secret=aa-ghcr-login-secret
         ports:
         - containerPort: {{ .Values.port }}
           protocol: TCP
@@ -55,3 +54,5 @@ spec:
           - key: ca.crt
             path: ca.crt
       {{- end }}
+      imagePullSecrets:
+        - name: aa-ghcr-login-secret

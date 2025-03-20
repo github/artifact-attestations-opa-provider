@@ -1,4 +1,4 @@
-REPOSITORY ?= openpolicyagent/gatekeeper-external-data-provider
+REPOSITORY ?= github/artifact-attestations-opa-provider
 IMG := $(REPOSITORY):dev
 CLUSTER = kind # or gatekeeper
 
@@ -35,8 +35,12 @@ cver:
 
 .PHONY: docker
 docker:
-	docker buildx build --platform linux/amd64 --load -t ${IMG} .
+	docker build --platform linux/arm64 -t ${IMG} .
 
-.PHONY: kind-load-image
+.PHONY: docker-arm
+docker-arm:
+	docker build --platform linux/arm64 -t ${IMG_ARM} -f Dockerfile.arm .
+
+.PHONY: kind-load-image-arm
 kind-load-image:
 	kind load docker-image ${IMG} --name ${CLUSTER}
