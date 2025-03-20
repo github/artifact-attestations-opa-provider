@@ -45,7 +45,7 @@ func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verifica
 		var err error
 
 		if iss, err = getIssuer(b); err != nil {
-			fmt.Printf("skipping 1\n")
+			fmt.Printf("failed to extract issuer, skipping\n")
 			continue
 		}
 
