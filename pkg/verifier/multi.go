@@ -66,8 +66,8 @@ func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verifica
 	return res, nil
 }
 
-// getIssuer extracts the certificate from the bundle and return the
-// organiation name that issued the certificate.
+// getIssuer extracts the certificate from the bundle and returns the
+// organization name that issued the certificate.
 func getIssuer(b *bundle.Bundle) (string, error) {
 	var vc verify.VerificationContent
 	var c *x509.Certificate
