@@ -4,26 +4,37 @@ import (
 	"crypto/x509"
 	"fmt"
 
-	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/verify"
 )
 
 const (
+	// PublicGoodIssuer is the organization name for certificates
+	// issued via PGI Sigstore.
 	PublicGoodIssuer = "sigstore.dev"
-	GitHubIssuer     = "GitHub, Inc."
+	// GitHubIssuer is the organization name for certificates
+	// issued via GitHub's Sigstore instance.
+	GitHubIssuer = "GitHub, Inc."
 )
 
+// Multi is a Verifier that knows about multiple trust roots and inspects
+// the bundle to select the correct trust root for each provided bundle.
 type Multi struct {
 	V map[string]*Verifier
 }
 
+// NewMulti initializes the multi verifier with a map of Issuer org to
+// a Verifier.
 func NewMulti(v map[string]*Verifier) *Multi {
 	return &Multi{
 		V: v,
 	}
 }
 
+// Verify iterates over each bundle and selects the correct verifier
+// based on the certificate's issuer. Bundles with unknown certificate
+// issuers are ignored.
 func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.VerificationResult, error) {
 	var res = []*verify.VerificationResult{}
 
@@ -34,7 +45,7 @@ func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verifica
 		var err error
 
 		if iss, err = getIssuer(b); err != nil {
-			fmt.Printf("skipping 1\n")
+			fmt.Printf("failed to extract issuer, skipping\n")
 			continue
 		}
 
@@ -55,6 +66,8 @@ func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verifica
 	return res, nil
 }
 
+// getIssuer extracts the certificate from the bundle and returns the
+// organization name that issued the certificate.
 func getIssuer(b *bundle.Bundle) (string, error) {
 	var vc verify.VerificationContent
 	var c *x509.Certificate

@@ -13,6 +13,8 @@ the images are valid by verifying its signatures.
 * Live refreshes of the trust root, the trust root is downloaded upon
   start and is not refreshed
 * Fix up Helm templates
+* Documentation of the code
+* Add linters
 
 ## Installation
 
@@ -23,6 +25,29 @@ the images are valid by verifying its signatures.
 
 1. Create a [kind
    cluster](https://kind.sigs.k8s.io/docs/user/quick-start/).
+1. Prepare `pull-secret` for private OCI registry (Optional)
+
+```
+$ kubectl create secret docker-registry \
+          ghcr-login-secret \
+          --docker-server=https://ghcr.io \
+          --docker-username=$YOUR_GITHUB_USERNAME \
+          --docker-password=$YOUR_GITHUB_TOKEN \
+          --docker-email=$YOUR_EMAIL
+```
+
+1. Prepare a pull secret for the OPA external data provider (Optional)
+
+```
+$ kubectl create secret \
+          -n provider-system \
+          docker-registry aa-ghcr-login-secret \
+          --docker-server=https://ghcr.io \
+          --docker-username=$YOUR_GITHUB_USERNAME \
+          --docker-password=$YOUR_GITHUB_TOKEN \
+          --docker-email=$YOUR_EMAIL
+```
+
 1. Install Gatekeeper and **enable external data feature**
 
 ```
