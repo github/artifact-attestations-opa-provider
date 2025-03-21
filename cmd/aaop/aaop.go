@@ -20,6 +20,7 @@ import (
 
 var (
 	noPGI       = flag.Bool("no-public-good", false, "disable public good sigstore instance")
+	certsDir    = flag.String("certs", "", "Directory to where TLS certs are stored")
 	trustDomain = flag.String("trust-domain", "", "trust domain to use")
 	tufRepo     = flag.String("tuf-repo", "", "URL to TUF repository")
 	tufRoot     = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
@@ -30,7 +31,6 @@ var (
 const (
 	certName = "tls.crt"
 	keyName  = "tls.key"
-	certsDir = "certs"
 )
 
 type transport struct {
@@ -64,8 +64,8 @@ func main() {
 	}
 
 	http.HandleFunc("/", t.validate)
-	var cf = filepath.Join(certsDir, certName)
-	var kf = filepath.Join(certsDir, keyName)
+	var cf = filepath.Join(*certsDir, certName)
+	var kf = filepath.Join(*certsDir, keyName)
 
 	fmt.Println("starting server...")
 	if err = srv.ListenAndServeTLS(cf, kf); err != nil {
