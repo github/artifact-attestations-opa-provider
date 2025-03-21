@@ -8,13 +8,7 @@ the images are valid by verifying its signatures.
 
 * mTLS between OPA Gatekeeper and the external data provider is not
   yet implemented, only server side TLS
-* No offline mode; the external data provider requires access to the
-  used TUF repositories to be able to update the trust root
-* Live refreshes of the trust root, the trust root is downloaded upon
-  start and is not refreshed
 * Fix up Helm templates
-* Documentation of the code
-* Add linters
 
 ## Installation
 
