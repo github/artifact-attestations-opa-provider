@@ -56,10 +56,25 @@ $ helm install gatekeeper/gatekeeper \
     --create-namespace
 ```
 
-1. Generate server TLS for the external data provider
+1. Generate server TLS for the external data provider and load them
+   into secrets
 
 ```
 $ ./scripts/gen_certs.sh
+```
+
+```
+$ cat cert-secrets.yaml
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: provider-tls-cert
+  namespace: provider-system
+data:
+  tls.crt: B64 of file tls.crt
+  tls.key: B64 of file tls.key
+$ kubectl apply -f cert-secrets.yaml
 ```
 
 1. Build and load the docker image

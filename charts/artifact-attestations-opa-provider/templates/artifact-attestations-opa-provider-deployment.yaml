@@ -33,6 +33,7 @@ spec:
         args:
         - -namespace=provider-system
         - -image-pull-secret=aa-ghcr-login-secret
+        - -certs={{ .Values.certDir }}
         ports:
         - containerPort: {{ .Values.port }}
           protocol: TCP
@@ -42,9 +43,22 @@ spec:
           mountPath: /tmp/gatekeeper
           readOnly: true
         {{- end }}
+        volumeMounts:
+        - name: provider-tls-cert
+          mountPath: /certs
+          readOnly: true
       restartPolicy: Always
       nodeSelector:
         kubernetes.io/os: linux
+      volumes:
+      - name: provider-tls-cert
+        secret:
+          secretName: provider-tls-cert
+          items:
+            - key: tls.crt
+              path: tls.crt
+            - key: tls.key
+              path: tls.key
       {{- if .Values.clientCAFile }}
       volumes:
       - name: gatekeeper-ca-cert
@@ -54,5 +68,3 @@ spec:
           - key: ca.crt
             path: ca.crt
       {{- end }}
-      imagePullSecrets:
-        - name: aa-ghcr-login-secret
