@@ -5,7 +5,7 @@ metadata:
   namespace:  {{ .Release.Namespace }}
 subjects:
 - kind: ServiceAccount
-  name: opa-provider
+  name: {{ .Values.serviceAccount }}
   apiGroup: ""
 roleRef:
   kind: Role
