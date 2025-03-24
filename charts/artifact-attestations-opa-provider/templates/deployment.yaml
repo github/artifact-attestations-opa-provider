@@ -31,7 +31,7 @@ spec:
           seccompProfile:
             type: RuntimeDefault
         args:
-        - -namespace=provider-system
+        - -namespace={{ .Release.Namespace }}
         - -image-pull-secret=aa-ghcr-login-secret
         - -certs={{ .Values.certDir }}
         ports:
