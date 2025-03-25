@@ -9,8 +9,6 @@ the images are valid by verifying its signatures.
 * mTLS between OPA Gatekeeper and the external data provider is not
   yet implemented, only server side TLS
 * No offline mode exposed via the helm chart
-* Live refreshes of the trust root, the trust root is downloaded upon
-  start and is not refreshed
 
 ## Installation
 
