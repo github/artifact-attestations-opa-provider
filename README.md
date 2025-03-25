@@ -95,18 +95,28 @@ $ helm install artifact-attestations-opa-provider charts/artifact-attestations-o
 
 1. Install constraint template and constraint.
 
+From repo:
+
 ```
-$ kubectl apply -f validation/artifact-attestations-constraint-template.yaml
-$ kubectl apply -f validation/artifact-attestations-constraint.yaml
+$ kubectl apply -f validation/from-repo-constraint-template.yml
+$ kubectl apply -f validation/from-repo-constraint.yml
 ```
 
-1. Test with an image from wrong repository.
+or from org:
+
+```
+$ kubectl apply -f validation/from-org-constraint-template.yml
+$ kubectl apply -f validation/from-org-constraint.yml
+```
+
+1. Test with an image from Tina's repository (PGI Sigstore)
 
 ```
 $ kubectl run nginx --image=ghcr.io/tinaheidinger/test-container:latest  --dry-run=server -ojson
 ```
 
-1. Correctly signed
+1. Test with image from Fredrik's repository (private package, GitHub
+   Sigstore)
 
 ```
 $ kubectl run nginx --image=ghcr.io/kommendorkapten/ghademo:latest --dry-run=server -ojson

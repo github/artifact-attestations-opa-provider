@@ -1,7 +1,7 @@
 apiVersion: constraints.gatekeeper.sh/v1beta1
-kind: K8sExternalDataFromRepo
+kind: K8sExternalDataFromOrg
 metadata:
-  name: require-build-provenance-from-repo
+  name: require-build-provenance-from-org
 spec:
   enforcementAction: deny
   match:
