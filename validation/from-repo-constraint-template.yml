@@ -1,12 +1,12 @@
 apiVersion: templates.gatekeeper.sh/v1
 kind: ConstraintTemplate
 metadata:
-  name: k8sexternaldatabuildprovenance
+  name: k8sexternaldatafromrepo
 spec:
   crd:
     spec:
       names:
-        kind: K8sExternalDataBuildProvenance
+        kind: K8sExternalDatafromrepo
   targets:
     - target: admission.k8s.gatekeeper.sh
       rego: |
@@ -33,9 +33,9 @@ spec:
         }
 
         response_with_error(response) {
-          not signed(response, "kommendorkapten/ghademo")
+          not fromRepo(response, ["kommendorkapten/ghademo"])
         }
 
-        signed(resp, repo) {
-          resp.responses[_][_][_].signature.certificate.githubWorkflowRepository == repo
+        fromRepo(resp, repos) {
+          resp.responses[_][_][_].signature.certificate.githubWorkflowRepository == repos[_]
         }

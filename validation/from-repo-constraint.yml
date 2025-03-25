@@ -1,5 +1,5 @@
 apiVersion: constraints.gatekeeper.sh/v1beta1
-kind: K8sExternalDataBuildProvenance
+kind: K8sExternalDataFromRepo
 metadata:
   name: require-build-provenance
 spec:
