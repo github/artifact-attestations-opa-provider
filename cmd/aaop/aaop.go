@@ -26,6 +26,7 @@ var (
 	tufRoot     = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
 	ns          = flag.String("namespace", "", "namespace the pod runs in")
 	ips         = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registrires")
+	port        = flag.String("port", "8080", "port to listen to")
 )
 
 const (
@@ -57,7 +58,7 @@ func main() {
 	}
 
 	var srv = &http.Server{
-		Addr:              ":8090",
+		Addr:              fmt.Sprintf(":%s", *port),
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,

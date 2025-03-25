@@ -1,5 +1,5 @@
 certDir: /certs
-clientCAFile: /tmp/gatekeeper/ca.crt
+serviceAccount: opa-provider-sa
 port: 8090
 provider:
   timeout: 5

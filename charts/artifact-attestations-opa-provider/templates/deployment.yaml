@@ -13,7 +13,7 @@ spec:
       labels:
         run: artifact-attestations-opa-provider
     spec:
-      serviceAccountName: opa-provider
+      serviceAccountName: {{ .Values.serviceAccount }}
       automountServiceAccountToken: true
       containers:
       - image: github/artifact-attestations-opa-provider:dev
@@ -31,21 +31,16 @@ spec:
           seccompProfile:
             type: RuntimeDefault
         args:
-        - -namespace=provider-system
+        - -namespace={{ .Release.Namespace }}
         - -image-pull-secret=aa-ghcr-login-secret
         - -certs={{ .Values.certDir }}
+        - -port={{ .Values.port }}
         ports:
         - containerPort: {{ .Values.port }}
           protocol: TCP
-        {{- if .Values.clientCAFile }}
-        volumeMounts:
-        - name: gatekeeper-ca-cert
-          mountPath: /tmp/gatekeeper
-          readOnly: true
-        {{- end }}
         volumeMounts:
         - name: provider-tls-cert
-          mountPath: /certs
+          mountPath: {{ .Values.certDir }}
           readOnly: true
       restartPolicy: Always
       nodeSelector:
@@ -59,12 +54,3 @@ spec:
               path: tls.crt
             - key: tls.key
               path: tls.key
-      {{- if .Values.clientCAFile }}
-      volumes:
-      - name: gatekeeper-ca-cert
-        secret:
-          secretName: gatekeeper-webhook-server-cert
-          items:
-          - key: ca.crt
-            path: ca.crt
-      {{- end }}

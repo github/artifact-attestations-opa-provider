@@ -8,16 +8,11 @@ the images are valid by verifying its signatures.
 
 * mTLS between OPA Gatekeeper and the external data provider is not
   yet implemented, only server side TLS
-* No offline mode; the external data provider requires access to the
-  used TUF repositories to be able to update the trust root
+* No offline mode exposed via the helm chart
 * Live refreshes of the trust root, the trust root is downloaded upon
   start and is not refreshed
-* Fix up Helm templates
-* Documentation of the code
-* Add linters
 
 ## Installation
-
 
 ## Verification
 
@@ -62,25 +57,10 @@ $ helm install gatekeeper/gatekeeper \
     --create-namespace
 ```
 
-1. Generate server TLS for the external data provider and load them
-   into secrets
+1. Generate server TLS for the external data provider
 
 ```
 $ ./scripts/gen_certs.sh
-```
-
-```
-$ cat cert-secrets.yaml
-
-apiVersion: v1
-kind: Secret
-metadata:
-  name: provider-tls-cert
-  namespace: provider-system
-data:
-  tls.crt: B64 of file tls.crt
-  tls.key: B64 of file tls.key
-$ kubectl apply -f cert-secrets.yaml
 ```
 
 1. Build and load the docker image
@@ -92,10 +72,23 @@ $ make kind-load-image
 
 1. Install the data provider
 
+To automatically provision the server tls certificate/key secret
+
 ```
 $ helm install artifact-attestations-opa-provider charts/artifact-attestations-opa-provider \
-    --set clientCAFile="" \
     --set provider.tls.caBundle="$(cat certs/ca.crt | base64 | tr -d '\n\r')" \
+    --set serverCert="$(cat certs/tls.crt | base64 | tr -d '\n\r')" \
+    --set serverKey="$(cat certs/tls.key | base64 | tr -d '\n\r')" \
+    --namespace provider-system \
+    --create-namespace
+```
+
+or if the secret is already created
+
+```
+$ helm install artifact-attestations-opa-provider charts/artifact-attestations-opa-provider \
+    --set provider.tls.caBundle="$(cat certs/ca.crt | base64 | tr -d '\n\r')" \
+    --set serverCert="" \
     --namespace provider-system \
     --create-namespace
 ```
