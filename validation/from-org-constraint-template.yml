@@ -37,8 +37,7 @@ spec:
         }
 
         fromOrg(resp, orgs) {
-          some i, j, k
-          nwo := resp.responses[i][j][k].signature.certificate.githubWorkflowRepository
-          parts := split(nwo, "/")
-          parts[0] == orgs[_]
+          some i, j, k, l
+          orgUri := resp.responses[i][j][k].signature.certificate.sourceRepositoryOwnerURI
+          endswith(orgUri, concat("", ["/", orgs[l]]))
         }

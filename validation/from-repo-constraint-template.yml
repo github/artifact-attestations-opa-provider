@@ -33,9 +33,11 @@ spec:
         }
 
         response_with_error(response) {
-          not fromRepo(response, ["kommendorkapten/ghademo"])
+          not fromRepo(response, ["kommendorkapten/ghademo", "tinaheidinger/test-container"])
         }
 
         fromRepo(resp, repos) {
-          resp.responses[_][_][_].signature.certificate.githubWorkflowRepository == repos[_]
+          some i
+          uri := resp.responses[_][_][_].signature.certificate.sourceRepositoryURI
+          endswith(uri, concat("", ["/", repos[i]]))
         }
