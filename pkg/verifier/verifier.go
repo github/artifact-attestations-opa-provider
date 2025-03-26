@@ -14,8 +14,7 @@ import (
 
 // Verifier verifies Sigstore bundles for OCI images.
 type Verifier struct {
-	c  *tuf.Client
-	tr *root.TrustedRoot
+	tr root.TrustedMaterial
 	vo []verify.VerifierOption
 }
 
@@ -33,21 +32,14 @@ var githubRoot []byte
 // provided.
 func New(rb []byte, tr, tgt string, vo []verify.VerifierOption) (*Verifier, error) {
 	var v Verifier
-	var b []byte
-	var err error
-
-	v.c, err = tuf.New(&tuf.Options{
+	var opts = &tuf.Options{
 		Root:              rb,
 		RepositoryBaseURL: tr,
 		DisableLocalCache: true,
-	})
-	if err != nil {
-		return nil, err
 	}
-	if b, err = v.c.GetTarget(tgt); err != nil {
-		return nil, err
-	}
-	if v.tr, err = root.NewTrustedRootFromJSON(b); err != nil {
+	var err error
+
+	if v.tr, err = root.NewLiveTrustedRootFromTarget(opts, tgt); err != nil {
 		return nil, err
 	}
 	v.vo = vo
