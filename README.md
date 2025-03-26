@@ -109,6 +109,13 @@ $ kubectl apply -f validation/from-org-constraint-template.yml
 $ kubectl apply -f validation/from-org-constraint.yml
 ```
 
+or from org with signer (reusable workflow):
+
+```
+$ kubectl apply -f validation/from-org-with-signer-constraint-template.yml
+$ kubectl apply -f validation/from-org-with-signer-constraint.yml
+```
+
 1. Test with an image from Tina's repository (PGI Sigstore)
 
 ```

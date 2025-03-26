@@ -1,0 +1,12 @@
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sExternalDataFromOrgWithSigner
+metadata:
+  name: require-build-provenance-from-org-with-signer
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: ["*"]
+        kinds: ["Pod"]
+    excludedNamespaces: ["provider-system"]
+    namespaces: ["default"]
