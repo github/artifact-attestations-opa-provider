@@ -47,7 +47,7 @@ spec:
           # find the occurence of `/.github/` and trim everything after it
           p := indexof(signerUri, "/.github/")
           signerRepoTrim := substring(signerUri, 0, p)
-          # add back the / prefix to get proper delimiter when doing comparisson
+          # add back the / prefix to get proper delimiter when doing comparison
           signerRepo := concat("", ["/", signerRepoTrim])
           endswith(signerRepo, concat("", ["/", signerRepos[m]]))
         }
