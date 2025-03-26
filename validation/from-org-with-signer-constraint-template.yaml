@@ -1,0 +1,53 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sexternaldatafromorgwithsigner
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sExternalDataFromOrgWithSigner
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sexternaldata
+
+        violation[{"msg": msg}] {
+          images := [img | img = input.review.object.spec.containers[_].image]
+
+          response := external_data({"provider": "artifact-attestations-opa-provider", "keys": images})
+
+          response_with_error(response)
+
+          msg := sprintf("invalid response: %v", [response])
+        }
+
+        response_with_error(response) {
+          count(response.errors) > 0
+          errs := response.errors[_]
+          contains(errs[1], "_unsigned")
+        }
+
+        response_with_error(response) {
+          count(response.system_error) > 0
+        }
+
+        response_with_error(response) {
+          not fromOrgWithSigner(response, ["kommendorkapten", "tinaheidinger"], ["kommendorkapten/build-scripts"])
+        }
+
+        fromOrgWithSigner(resp, orgs, signerRepos) {
+          some i, j, k, l, m
+          orgUri :=    resp.responses[i][j][k].signature.certificate.sourceRepositoryOwnerURI
+          signerUri := resp.responses[i][j][k].signature.certificate.buildSignerURI
+          # Verify source owner org is allowed
+          endswith(orgUri, concat("", ["/", orgs[l]]))
+          # Verify signer org is allowed
+          # Remove the path to the repo, workflow and ref
+          # find the occurence of `/.github/` and trim everything after it
+          p := indexof(signerUri, "/.github/")
+          signerRepoTrim := substring(signerUri, 0, p)
+          # add back the / prefix to get proper delimiter when doing comparison
+          signerRepo := concat("", ["/", signerRepoTrim])
+          endswith(signerRepo, concat("", ["/", signerRepos[m]]))
+        }

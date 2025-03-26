@@ -18,7 +18,7 @@ the images are valid by verifying its signatures.
 
 1. Create a [kind
    cluster](https://kind.sigs.k8s.io/docs/user/quick-start/).
-1. Prepare `pull-secret` for private OCI registry (Optional)
+2. Prepare `pull-secret` for private OCI registry (Optional)
 
 ```
 $ kubectl create secret docker-registry \
@@ -29,7 +29,7 @@ $ kubectl create secret docker-registry \
           --docker-email=$YOUR_EMAIL
 ```
 
-1. Prepare a pull secret for the OPA external data provider (Optional)
+3. Prepare a pull secret for the OPA external data provider (Optional)
 
 ```
 $ kubectl create secret \
@@ -41,7 +41,7 @@ $ kubectl create secret \
           --docker-email=$YOUR_EMAIL
 ```
 
-1. Install Gatekeeper and **enable external data feature**
+4. Install Gatekeeper and **enable external data feature**
 
 ```
 # Add the Gatekeeper Helm repository
@@ -55,20 +55,20 @@ $ helm install gatekeeper/gatekeeper \
     --create-namespace
 ```
 
-1. Generate server TLS for the external data provider
+5. Generate server TLS for the external data provider
 
 ```
 $ ./scripts/gen_certs.sh
 ```
 
-1. Build and load the docker image
+6. Build and load the docker image
 
 ```
 $ make docker
 $ make kind-load-image
 ```
 
-1. Install the data provider
+7. Install the data provider
 
 To automatically provision the server tls certificate/key secret
 
@@ -91,23 +91,47 @@ $ helm install artifact-attestations-opa-provider charts/artifact-attestations-o
     --create-namespace
 ```
 
-1. Install constraint template and constraint.
+8. Install constraint template and constraint.
+
+From repo:
 
 ```
-$ kubectl apply -f validation/artifact-attestations-constraint-template.yaml
-$ kubectl apply -f validation/artifact-attestations-constraint.yaml
+$ kubectl apply -f validation/from-repo-constraint-template.yml
+$ kubectl apply -f validation/from-repo-constraint.yml
 ```
 
-1. Test with an image from wrong repository.
+or from org:
+
+```
+$ kubectl apply -f validation/from-org-constraint-template.yml
+$ kubectl apply -f validation/from-org-constraint.yml
+```
+
+or from org with signer (reusable workflow):
+
+```
+$ kubectl apply -f validation/from-org-with-signer-constraint-template.yml
+$ kubectl apply -f validation/from-org-with-signer-constraint.yml
+```
+
+9. Test with an image from Tina's repository (PGI Sigstore)
 
 ```
 $ kubectl run nginx --image=ghcr.io/tinaheidinger/test-container:latest  --dry-run=server -ojson
 ```
 
-1. Correctly signed
+10. Test with image from Fredrik's repository (private package, GitHub
+   Sigstore)
 
 ```
 $ kubectl run nginx --image=ghcr.io/kommendorkapten/ghademo:latest --dry-run=server -ojson
+```
+
+11. Test with image from Fredrik's repository (private package, GitHub
+   Sigstore) using a reusable workflow
+
+```
+$ kubectl run nginx --image=ghcr.io/kommendorkapten/ghademo:reusable --dry-run=server -ojson
 ```
 
 ### Cleaning up

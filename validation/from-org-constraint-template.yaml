@@ -1,12 +1,12 @@
 apiVersion: templates.gatekeeper.sh/v1
 kind: ConstraintTemplate
 metadata:
-  name: k8sexternaldatabuildprovenance
+  name: k8sexternaldatafromorg
 spec:
   crd:
     spec:
       names:
-        kind: K8sExternalDataBuildProvenance
+        kind: K8sExternalDataFromOrg
   targets:
     - target: admission.k8s.gatekeeper.sh
       rego: |
@@ -33,9 +33,11 @@ spec:
         }
 
         response_with_error(response) {
-          not signed(response, "kommendorkapten/ghademo")
+          not fromOrg(response, ["kommendorkapten", "tinaheidinger"])
         }
 
-        signed(resp, repo) {
-          resp.responses[_][_][_].signature.certificate.githubWorkflowRepository == repo
+        fromOrg(resp, orgs) {
+          some i, j, k, l
+          orgUri := resp.responses[i][j][k].signature.certificate.sourceRepositoryOwnerURI
+          endswith(orgUri, concat("", ["/", orgs[l]]))
         }
