@@ -33,7 +33,7 @@ spec:
         }
 
         response_with_error(response) {
-          not fromOrgWithSigner(response, ["kommendorkapten", "tinaheidinger"], ["kommendorkapten/ghademo"])
+          not fromOrgWithSigner(response, ["kommendorkapten", "tinaheidinger"], ["kommendorkapten/build-scripts"])
         }
 
         fromOrgWithSigner(resp, orgs, signerRepos) {

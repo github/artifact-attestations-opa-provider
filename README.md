@@ -129,6 +129,13 @@ $ kubectl run nginx --image=ghcr.io/tinaheidinger/test-container:latest  --dry-r
 $ kubectl run nginx --image=ghcr.io/kommendorkapten/ghademo:latest --dry-run=server -ojson
 ```
 
+1. Test with image from Fredrik's repository (private package, GitHub
+   Sigstore) using a reusable workflow
+
+```
+$ kubectl run nginx --image=ghcr.io/kommendorkapten/ghademo:reusable --dry-run=server -ojson
+```
+
 ### Cleaning up
 
 ```
