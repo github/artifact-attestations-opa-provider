@@ -19,10 +19,13 @@ the images are valid by verifying its signatures.
 
 ### Preparation
 
-Before the installation starts, the way to authenticate the OPA
-external data provider must be configured, this is done via regular
-TLS certificates. Also if private OCI registries are used, the
-authentication method must be configured.
+Before the installation starts, two steps are reuired to prepare:
+
+1. How OPA Gatekeeper authenticates the OPA External Data
+   Provider. This is done via regular TLS certificates, but they must
+   be created and made available to the services.
+1. If private OPI registries are used, the authentication must be
+   configured.
 
 #### OCI Authentication
 
@@ -59,10 +62,11 @@ during helm install.
 > RSA keys for the TLS certificates.
 
 OPA Gatekeeper relies on TLS authentication when communicating with
-external data providers. There is a provided script to generate a self
-signed CA and TLS certificate. The certificate can be created via
-other means, as long as the private key can be mounted as a secret to
-the Artifact Attestations OPA Provider POD.
+external data providers. There is a provided
+[script](scripts/gen_certs.sh) to generate a self signed CA and TLS
+certificate. The certificate can be created via other means, as long
+as the private key can be mounted as a secret to the Artifact
+Attestations OPA Provider POD.
 
 When installing the Artifacts Attestations OPA Provider, the CA
 certificate bundle must be provided to configure the root of trust.
