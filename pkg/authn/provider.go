@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/authn/kubernetes"
 	"github.com/google/go-containerregistry/pkg/authn/k8schain"
+	"github.com/google/go-containerregistry/pkg/authn/kubernetes"
 )
 
 // KeyChainProvider is used to provide k8s keychains, which can be used
@@ -31,6 +31,7 @@ func NewKeyChainProvider(ns string, ips []string) *KeyChainProvider {
 	}
 }
 
+// KeyChain returns the configured keychain from this provider.
 func (k *KeyChainProvider) KeyChain(ctx context.Context) (authn.Keychain, error) {
 	var kc authn.Keychain
 	var kcs = []authn.Keychain{
