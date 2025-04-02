@@ -12,6 +12,9 @@ spec:
     metadata:
       labels:
         run: artifact-attestations-opa-provider
+        {{- if .Values.azureClientId }}
+        azure.workload.identity/use: "true"
+        {{- end }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount }}
       automountServiceAccountToken: true
