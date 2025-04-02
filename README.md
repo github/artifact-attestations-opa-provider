@@ -59,12 +59,13 @@ during helm install.
 > RSA keys for the TLS certificates.
 
 OPA Gatekeeper relies on TLS authentication when communicating with
-external data providers. The is a provided script to generate a self
+external data providers. There is a provided script to generate a self
 signed CA and TLS certificate. The certificate can be created via
 other means, as long as the private key can be mounted as a secret to
-the Artifact Attestations OPA Provider POD. When installing the
-Artifacts Attestations OPA Provider, the CA certificate bundle must be
-provided to configure the root of trust.
+the Artifact Attestations OPA Provider POD.
+
+When installing the Artifacts Attestations OPA Provider, the CA
+certificate bundle must be provided to configure the root of trust.
 
 The secret containing the TLS certificate and private key can be
 automatically created, or created separately from the helm
@@ -130,7 +131,7 @@ The following three examples are provided:
    originating from a list of organizations, and built with a reusable
    workflow from a list of provided repositories.
 
-## Cleaning up
+## Uninstall
 
 ```
 $ kubectl delete -f validation
