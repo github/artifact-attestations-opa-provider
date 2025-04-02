@@ -33,7 +33,7 @@ spec:
         }
 
         response_with_error(response) {
-          not fromOrg(response, ["kommendorkapten", "tinaheidinger"])
+          not fromOrg(response, ["your-org-1", "your-org-2"])
         }
 
         fromOrg(resp, orgs) {

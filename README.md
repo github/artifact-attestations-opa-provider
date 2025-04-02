@@ -4,6 +4,11 @@ feature](https://open-policy-agent.github.io/gatekeeper/website/docs/externaldat
 with [Artifact attestations](https://github.com/actions/attest) to determine whether
 the images are valid by verifying its signatures.
 
+> [!IMPORTANT]
+> For this to work, OPA Gatekeeper must run with
+> `enableExternalData=true`, which can be configured during
+> installation.
+
 ## Limitations
 
 * mTLS between OPA Gatekeeper and the external data provider is not
@@ -12,129 +17,120 @@ the images are valid by verifying its signatures.
 
 ## Installation
 
-## Verification
+### Preparation
 
-## Local installation
+Before the installation starts, the way to authenticate the OPA
+external data provider must be configured, this is done via regular
+TLS certificates. Also if private OCI registries are used, the
+authentication method must be configured.
 
-1. Create a [kind
-   cluster](https://kind.sigs.k8s.io/docs/user/quick-start/).
-2. Prepare `pull-secret` for private OCI registry (Optional)
+#### OCI Authentication
 
-```
-$ kubectl create secret docker-registry \
-          ghcr-login-secret \
-          --docker-server=https://ghcr.io \
-          --docker-username=$YOUR_GITHUB_USERNAME \
-          --docker-password=$YOUR_GITHUB_TOKEN \
-          --docker-email=$YOUR_EMAIL
-```
+Currently there are two tested authentication methods known to work
+with private OCI registries:
 
-3. Prepare a pull secret for the OPA external data provider (Optional)
+1. Using `imagePullSecrets`
+2. Using Managed Identities with Azure Managed Kubernetes Service
+   (AKS)
 
-```
-$ kubectl create secret \
-          -n provider-system \
-          docker-registry aa-ghcr-login-secret \
-          --docker-server=https://ghcr.io \
-          --docker-username=$YOUR_GITHUB_USERNAME \
-          --docker-password=$YOUR_GITHUB_TOKEN \
-          --docker-email=$YOUR_EMAIL
-```
+Although these are the only tested authentication methods, others may
+work (Azure using Sevice Principals, GKE and EKS configurations) as
+long as the POD/Service Accounts are configured properly.
 
-4. Install Gatekeeper and **enable external data feature**
+To use `imagePullSecrets`, prepare the secret in the namespace used by
+the Artifact Attestations OPA Provider. The default name is
+`aa-login-secret` but can be changed if needed, just make sure to
+update the value in `values.yaml` before installing.
 
-```
-# Add the Gatekeeper Helm repository
-$ helm repo add gatekeeper https://open-policy-agent.github.io/gatekeeper/charts
+To use Azure Managed Identities, first configure the Managed Identity
+with the required permission (ACR Pull against the relevant
+registries), then [configure a federated
+credential](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation-config-app-trust-managed-identity?tabs=microsoft-entra-admin-center#configure-a-federated-identity-credential-on-an-existing-application)
+against the K8s cluster.
 
-# Install the latest version of Gatekeeper with the external data feature enabled.
-$ helm install gatekeeper/gatekeeper \
-    --set enableExternalData=true \
-    --name-template=gatekeeper \
-    --namespace gatekeeper-system \
-    --create-namespace
-```
+To enable the use of Azure Managed Identities, you must provide the
+Managed Identity's Client ID: `--set azureClientId=${AZURE_CLIENT_ID}`
+during helm install.
 
-5. Generate server TLS for the external data provider
+#### TLS certificates
 
-```
-$ ./scripts/gen_certs.sh
-```
+> [!NOTE]
+> Tested version of OPA Gatekeeper up to version 3.18.2 only supports
+> RSA keys for the TLS certificates.
 
-6. Build and load the docker image
+OPA Gatekeeper relies on TLS authentication when communicating with
+external data providers. The is a provided script to generate a self
+signed CA and TLS certificate. The certificate can be created via
+other means, as long as the private key can be mounted as a secret to
+the Artifact Attestations OPA Provider POD. When installing the
+Artifacts Attestations OPA Provider, the CA certificate bundle must be
+provided to configure the root of trust.
 
-```
-$ make docker
-$ make kind-load-image
-```
+The secret containing the TLS certificate and private key can be
+automatically created, or created separately from the helm
+installation. The secret must have the name `provider-tls-cert`.
 
-7. Install the data provider
+### Install via helm
 
-To automatically provision the server tls certificate/key secret
+#### Using `imagePullSecrets`
 
 ```
 $ helm install artifact-attestations-opa-provider charts/artifact-attestations-opa-provider \
     --set provider.tls.caBundle="$(cat certs/ca.crt | base64 | tr -d '\n\r')" \
     --set serverCert="$(cat certs/tls.crt | base64 | tr -d '\n\r')" \
     --set serverKey="$(cat certs/tls.key | base64 | tr -d '\n\r')" \
+    --set imagePullSecrets=<name-of-your-secret> \
     --namespace provider-system \
     --create-namespace
 ```
 
-or if the secret is already created
+#### Using Azure Managed Identity
+
+```
+$ helm install artifact-attestations-opa-provider charts/artifact-attestations-opa-provider \
+    --set provider.tls.caBundle="$(cat certs/ca.crt | base64 | tr -d '\n\r')" \
+    --set serverCert="$(cat certs/tls.crt | base64 | tr -d '\n\r')" \
+    --set serverKey="$(cat certs/tls.key | base64 | tr -d '\n\r')" \
+    --set azureClientId=${AZURE_CLIENT_ID} \
+    --namespace provider-system \
+    --create-namespace
+```
+
+#### Using Azure Managed Identity and an existing TLS secret
 
 ```
 $ helm install artifact-attestations-opa-provider charts/artifact-attestations-opa-provider \
     --set provider.tls.caBundle="$(cat certs/ca.crt | base64 | tr -d '\n\r')" \
     --set serverCert="" \
+    --set azureClientId=${AZURE_CLIENT_ID} \
     --namespace provider-system \
     --create-namespace
 ```
 
-8. Install constraint template and constraint.
+## Verification
 
-From repo:
+Three examples are provided that can be used as references when
+building out the policy.
 
-```
-$ kubectl apply -f validation/from-repo-constraint-template.yml
-$ kubectl apply -f validation/from-repo-constraint.yml
-```
+The policies are regular OPA Gatekeeper Constraints, where the
+enforcement action can be set, and the targeted/ignored resources.
 
-or from org:
+When writing the policy using the provided examples, the organization
+should be the name of the GitHub org, like `octo-org`, and the
+repository must include the org name like `octo-org/octo-repo`.
 
-```
-$ kubectl apply -f validation/from-org-constraint-template.yml
-$ kubectl apply -f validation/from-org-constraint.yml
-```
+The following three examples are provided:
 
-or from org with signer (reusable workflow):
+1. [Verify image](validation/from-org-constraint-template.yaml) is
+   built from a list of provided organizations.
+1. [Verify image](validation/from-repo-constraint-template.yaml) is
+   built from a list of provided repositories.
+1. [Verify
+   image](validation/from-org-with-signer-constraint-template.yaml) is
+   originating from a list of organizations, and built with a reusable
+   workflow from a list of provided repositories.
 
-```
-$ kubectl apply -f validation/from-org-with-signer-constraint-template.yml
-$ kubectl apply -f validation/from-org-with-signer-constraint.yml
-```
-
-9. Test with an image from Tina's repository (PGI Sigstore)
-
-```
-$ kubectl run nginx --image=ghcr.io/tinaheidinger/test-container:latest  --dry-run=server -ojson
-```
-
-10. Test with image from Fredrik's repository (private package, GitHub
-   Sigstore)
-
-```
-$ kubectl run nginx --image=ghcr.io/kommendorkapten/ghademo:latest --dry-run=server -ojson
-```
-
-11. Test with image from Fredrik's repository (private package, GitHub
-   Sigstore) using a reusable workflow
-
-```
-$ kubectl run nginx --image=ghcr.io/kommendorkapten/ghademo:reusable --dry-run=server -ojson
-```
-
-### Cleaning up
+## Cleaning up
 
 ```
 $ kubectl delete -f validation

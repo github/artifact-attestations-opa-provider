@@ -33,7 +33,7 @@ spec:
         }
 
         response_with_error(response) {
-          not fromRepo(response, ["kommendorkapten/ghademo", "tinaheidinger/test-container"])
+          not fromRepo(response, ["your-org-1/a-repo-1", "your-org-2/a-repo-2"])
         }
 
         fromRepo(resp, repos) {

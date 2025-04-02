@@ -35,7 +35,7 @@ spec:
             type: RuntimeDefault
         args:
         - -namespace={{ .Release.Namespace }}
-        - -image-pull-secret=aa-ghcr-login-secret
+        - -image-pull-secret={{ .Values.imagePullSecrets }}
         - -certs={{ .Values.certDir }}
         - -port={{ .Values.port }}
         ports:
