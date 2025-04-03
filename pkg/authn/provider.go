@@ -39,7 +39,7 @@ func (k *KeyChainProvider) KeyChain(ctx context.Context) (authn.Keychain, error)
 	}
 	var err error
 
-	// Add the kubenertes authenticator
+	// Add the kubernetes authenticator
 	kc, err = kubernetes.NewInCluster(ctx, kubernetes.Options{
 		Namespace:        k.namespace,
 		ImagePullSecrets: k.imagePullSecrets,
