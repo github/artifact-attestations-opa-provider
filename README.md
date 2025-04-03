@@ -19,7 +19,7 @@ the images are valid by verifying its signatures.
 
 ### Preparation
 
-Before the installation starts, two steps are reuired to prepare:
+Before the installation starts, two steps are required to prepare:
 
 1. How OPA Gatekeeper authenticates the OPA External Data
    Provider. This is done via regular TLS certificates, but they must
