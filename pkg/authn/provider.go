@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/authn/k8schain"
 	"github.com/google/go-containerregistry/pkg/authn/kubernetes"
 )
 
@@ -32,16 +33,32 @@ func NewKeyChainProvider(ns string, ips []string) *KeyChainProvider {
 
 // KeyChain returns the configured keychain from this provider.
 func (k *KeyChainProvider) KeyChain(ctx context.Context) (authn.Keychain, error) {
-	if k.namespace == "" || len(k.imagePullSecrets) == 0 {
-		return authn.DefaultKeychain, nil
+	var kc authn.Keychain
+	var kcs = []authn.Keychain{
+		authn.DefaultKeychain,
 	}
+	var err error
 
-	var opt = kubernetes.Options{
+	// Add the kubernetes authenticator
+	kc, err = kubernetes.NewInCluster(ctx, kubernetes.Options{
 		Namespace:        k.namespace,
 		ImagePullSecrets: k.imagePullSecrets,
+	})
+	if err != nil {
+		fmt.Printf("can't add kubernetes key chain: %s\n", err)
+	} else {
+		kcs = append(kcs, kc)
 	}
 
-	// For now no caching is used, a new client is initialized and
-	// queried for each request.
-	return kubernetes.NewInCluster(ctx, opt)
+	// Add a "cloud k8s" authenticator
+	kc, err = k8schain.NewInCluster(ctx, k8schain.Options{
+		Namespace: k.namespace,
+	})
+	if err != nil {
+		fmt.Printf("can't add k8schain key chain: %s\n", err)
+	} else {
+		kcs = append(kcs, kc)
+	}
+
+	return authn.NewMultiKeychain(kcs...), nil
 }
