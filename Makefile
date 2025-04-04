@@ -1,6 +1,5 @@
 REPOSITORY ?= github/artifact-attestations-opa-provider
 IMG := $(REPOSITORY):dev
-CLUSTER = kind # or gatekeeper
 
 all: aaop
 
@@ -11,36 +10,22 @@ build: aaop
 aaop:
 	go build -o $@ cmd/aaop/$@.go
 
+.PHONY: tidy
 tidy:
 	go mod tidy
 
+.PHONY: lint
 lint:
 	golangci-lint run
 
+.PHONY: test
 test:
 	go test ./... -race
 
-snapshot:
-	goreleaser release --clean --snapshot --skip-sign --skip-publish
-
-release:
-	goreleaser release --clean
-
+.PHONY: fmt
 fmt:
 	go fmt ./...
 
-.PHONY: cver
-cver:
-	go build -o $@ cmd/cver/$@.go
-
 .PHONY: docker
 docker:
-	docker build --platform linux/arm64 -t ${IMG} .
-
-.PHONY: docker-arm
-docker-arm:
-	docker build --platform linux/arm64 -t ${IMG_ARM} -f Dockerfile.arm .
-
-.PHONY: kind-load-image-arm
-kind-load-image:
-	kind load docker-image ${IMG} --name ${CLUSTER}
+	docker build -t ${IMG} .
