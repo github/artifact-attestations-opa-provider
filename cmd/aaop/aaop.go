@@ -118,7 +118,7 @@ func loadVerifiers(pgi bool, td string) provider.Verifier {
 			log.Fatalf("failed to load PGI verifier: %v", err)
 		}
 		mv.V[verifier.PublicGoodIssuer] = v
-		log.Println("loaded verfier for public good Sigstore")
+		log.Println("loaded verifier for public good Sigstore")
 	}
 
 	if v, err = verifier.GHVerifier(td); err != nil {
@@ -128,7 +128,7 @@ func loadVerifiers(pgi bool, td string) provider.Verifier {
 	if td == "" {
 		td = "dotcom"
 	}
-	log.Printf("loaded verfier for GitHub Sigstore: %s", td)
+	log.Printf("loaded verifier for GitHub Sigstore: %s", td)
 
 	return &mv
 }
