@@ -1,5 +1,6 @@
 REPOSITORY ?= github/artifact-attestations-opa-provider
-IMG := $(REPOSITORY):dev
+TAG := $(or $(TAG), dev)
+IMG := $(REPOSITORY):$(TAG)
 
 all: aaop
 

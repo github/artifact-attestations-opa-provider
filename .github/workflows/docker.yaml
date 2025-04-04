@@ -1,0 +1,41 @@
+name: Build and push Docker image
+
+on:
+  push:
+    branches:
+      - main
+  pull_request: {}
+
+permissions: {}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      packages: write
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ github.repository }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set tag
+        run: |
+          BRANCH=`git branch --show-current`
+          if [ "${BRANCH}" = "main" ]; then
+              TAG=latest
+          else
+              TAG=${BRANCH}
+          fi
+          export TAG
+      - name: Build and push image
+        id: push
+        uses: docker/build-push-action@v5.0.0
+        with:
+          context: .
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
