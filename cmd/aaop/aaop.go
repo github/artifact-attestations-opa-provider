@@ -97,11 +97,11 @@ func loadCustomVerifier(repo, root, td string) (provider.Verifier, error) {
 	var err error
 
 	if rb, err = os.ReadFile(root); err != nil {
-		return nil, fmt.Errorf("failed to load verifier: %v", err)
+		return nil, fmt.Errorf("failed to load verifier: %w", err)
 	}
 
 	if v, err = verifier.New(rb, repo, td, vo); err != nil {
-		return nil, fmt.Errorf("failed to create verifier: %v", err)
+		return nil, fmt.Errorf("failed to create verifier: %w", err)
 	}
 
 	return v, nil
@@ -121,14 +121,14 @@ func loadVerifiers(pgi bool, td string) (provider.Verifier, error) {
 	// only load PGI if no tenant's trust domain is selected
 	if pgi && td == "" {
 		if v, err = verifier.PGIVerifier(); err != nil {
-			return nil, fmt.Errorf("failed to load PGI verifier: %v", err)
+			return nil, fmt.Errorf("failed to load PGI verifier: %w", err)
 		}
 		mv.V[verifier.PublicGoodIssuer] = v
 		log.Println("loaded verifier for public good Sigstore")
 	}
 
 	if v, err = verifier.GHVerifier(td); err != nil {
-		return nil, fmt.Errorf("failed to load GitHub verifier: %v", err)
+		return nil, fmt.Errorf("failed to load GitHub verifier: %w", err)
 	}
 	mv.V[verifier.GitHubIssuer] = v
 	if td == "" {
