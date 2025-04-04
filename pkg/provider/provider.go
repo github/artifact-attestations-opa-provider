@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -65,7 +66,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 	// If the keychain configured is empty, the default keychain is used
 	// which works for public registries.
 	if kc, err = p.kc.KeyChain(ctx); err != nil {
-		fmt.Printf("provider::validate error retrieving key chain: %s\n", err)
+		log.Printf("validate: error retrieving key chain: %s", err)
 		return ErrorResponse(fmt.Sprintf("ERROR: KeyChain: %s", err))
 	}
 	var ro = fetcher.GetRemoteOptions(ctx, kc)
@@ -75,26 +76,26 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		var res []*verify.VerificationResult
 		var ref name.Reference
 
-		fmt.Println("provider::validate verify signature for:", key)
+		log.Printf("validate: verify signature for: %v", key)
 		if ref, err = name.ParseReference(key); err != nil {
-			fmt.Printf("provider::validate error parsing reference: %s\n", err)
+			log.Printf("validate: error parsing reference: %s", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: ParseReference(%q): %v", key, err))
 		}
 
 		b, h, err := fetcher.BundleFromName(ref, ro)
 		if err != nil {
-			fmt.Printf("provider::validate error fetching bundles: %s\n", err)
+			log.Printf("validate: error fetching bundles: %s", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: FromBundle(%q): %v", key, err))
 		}
 
 		if res, err = p.v.Verify(b, h); err != nil {
-			fmt.Printf("provider::validate error calling verify: %s\n", err)
+			log.Printf("validate: error calling verify: %s", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: VerifyImageSignatures(%q): %v", key, err))
 		}
 
 		var bundleVerified = len(res) > 0
 		if bundleVerified {
-			fmt.Printf("provider::validate %d valid signatures found for %s\n",
+			log.Printf("validate: %d valid signatures found for %s",
 				len(res),
 				key)
 			results = append(results, externaldata.Item{
@@ -102,7 +103,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				Value: res,
 			})
 		} else {
-			fmt.Printf("provider::validate no valid signatures found for: %s\n", key)
+			log.Printf("validate no valid signatures found for: %s", key)
 			results = append(results, externaldata.Item{
 				Key:   key,
 				Error: key + "_unsigned",

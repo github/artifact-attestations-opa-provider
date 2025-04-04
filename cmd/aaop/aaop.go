@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -38,6 +39,10 @@ type transport struct {
 	p *provider.Provider
 }
 
+func init() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile | log.LUTC)
+}
+
 func main() {
 	var kc *authn.KeyChainProvider
 	var v provider.Verifier
@@ -48,7 +53,7 @@ func main() {
 	if *tufRepo != "" && *tufRoot != "" {
 		v = loadCustomVerifier(*tufRepo, *tufRoot, *trustDomain)
 	} else {
-		v = loadVerifier(!*noPGI, *trustDomain)
+		v = loadVerifiers(!*noPGI, *trustDomain)
 	}
 
 	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
@@ -68,9 +73,9 @@ func main() {
 	var cf = filepath.Join(*certsDir, certName)
 	var kf = filepath.Join(*certsDir, keyName)
 
-	fmt.Println("starting server...")
+	log.Println("starting server...")
 	if err = srv.ListenAndServeTLS(cf, kf); err != nil {
-		panic(err)
+		log.Fatalf("failed to start HTTP server: %v", err)
 	}
 }
 
@@ -86,21 +91,21 @@ func loadCustomVerifier(repo, root, td string) provider.Verifier {
 	var err error
 
 	if rb, err = os.ReadFile(root); err != nil {
-		panic(err)
+		log.Fatalf("failed to load verifier: %v", err)
 	}
 
 	if v, err = verifier.New(rb, repo, td, vo); err != nil {
-		panic(err)
+		log.Fatalf("failed to create verifier: %v", err)
 	}
 
 	return v
 }
 
-// loadVerfier returns the default verifiers. If pgi is true and tr is
+// loadVerfiers returns the default verifiers. If pgi is true and tr is
 // the empty string, pgi and gh verifiers are returned.
 // if the provided trust domain is set, only gh verifier is returend,
 // with the set trust domain.
-func loadVerifier(pgi bool, td string) provider.Verifier {
+func loadVerifiers(pgi bool, td string) provider.Verifier {
 	var mv = verifier.Multi{
 		V: map[string]*verifier.Verifier{},
 	}
@@ -110,17 +115,20 @@ func loadVerifier(pgi bool, td string) provider.Verifier {
 	// only load PGI if no tenant's trust domain is selected
 	if pgi && td == "" {
 		if v, err = verifier.PGIVerifier(); err != nil {
-			panic(err)
+			log.Fatalf("failed to load PGI verifier: %v", err)
 		}
 		mv.V[verifier.PublicGoodIssuer] = v
-		fmt.Println("loaded verfier for public good Sigstore")
+		log.Println("loaded verfier for public good Sigstore")
 	}
 
 	if v, err = verifier.GHVerifier(td); err != nil {
-		panic(err)
+		log.Fatalf("failed to load GitHub verifier: %v", err)
 	}
 	mv.V[verifier.GitHubIssuer] = v
-	fmt.Println("loaded verfier for GitHub Sigstore")
+	if td == "" {
+		td = "dotcom"
+	}
+	log.Printf("loaded verfier for GitHub Sigstore: %s", td)
 
 	return &mv
 }
@@ -163,10 +171,10 @@ func sendResponse(w http.ResponseWriter, r *externaldata.ProviderResponse) {
 			msg,
 			r.Response.SystemError)
 	}
-	fmt.Printf("%s\n", msg)
+	log.Print(msg)
 
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(r); err != nil {
-		panic(err)
+		log.Printf("ERROR: failed to write response: %v", err)
 	}
 }
