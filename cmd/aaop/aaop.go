@@ -51,9 +51,15 @@ func main() {
 	flag.Parse()
 
 	if *tufRepo != "" && *tufRoot != "" {
-		v = loadCustomVerifier(*tufRepo, *tufRoot, *trustDomain)
+		if v, err = loadCustomVerifier(*tufRepo,
+			*tufRoot,
+			*trustDomain); err != nil {
+			log.Fatal(err)
+		}
 	} else {
-		v = loadVerifiers(!*noPGI, *trustDomain)
+		if v, err = loadVerifiers(!*noPGI, *trustDomain); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
@@ -82,7 +88,7 @@ func main() {
 // loadCustomVerifier loads a user provided TUF root.
 // Currently only verificatoin options with RFC3161 signed timestamps
 // are supported.
-func loadCustomVerifier(repo, root, td string) provider.Verifier {
+func loadCustomVerifier(repo, root, td string) (provider.Verifier, error) {
 	var rb []byte
 	var v *verifier.Verifier
 	var vo = []verify.VerifierOption{
@@ -91,21 +97,21 @@ func loadCustomVerifier(repo, root, td string) provider.Verifier {
 	var err error
 
 	if rb, err = os.ReadFile(root); err != nil {
-		log.Fatalf("failed to load verifier: %v", err)
+		return nil, fmt.Errorf("failed to load verifier: %v", err)
 	}
 
 	if v, err = verifier.New(rb, repo, td, vo); err != nil {
-		log.Fatalf("failed to create verifier: %v", err)
+		return nil, fmt.Errorf("failed to create verifier: %v", err)
 	}
 
-	return v
+	return v, nil
 }
 
 // loadVerfiers returns the default verifiers. If pgi is true and tr is
 // the empty string, pgi and gh verifiers are returned.
 // if the provided trust domain is set, only gh verifier is returend,
 // with the set trust domain.
-func loadVerifiers(pgi bool, td string) provider.Verifier {
+func loadVerifiers(pgi bool, td string) (provider.Verifier, error) {
 	var mv = verifier.Multi{
 		V: map[string]*verifier.Verifier{},
 	}
@@ -115,14 +121,14 @@ func loadVerifiers(pgi bool, td string) provider.Verifier {
 	// only load PGI if no tenant's trust domain is selected
 	if pgi && td == "" {
 		if v, err = verifier.PGIVerifier(); err != nil {
-			log.Fatalf("failed to load PGI verifier: %v", err)
+			return nil, fmt.Errorf("failed to load PGI verifier: %v", err)
 		}
 		mv.V[verifier.PublicGoodIssuer] = v
 		log.Println("loaded verifier for public good Sigstore")
 	}
 
 	if v, err = verifier.GHVerifier(td); err != nil {
-		log.Fatalf("failed to load GitHub verifier: %v", err)
+		return nil, fmt.Errorf("failed to load GitHub verifier: %v", err)
 	}
 	mv.V[verifier.GitHubIssuer] = v
 	if td == "" {
@@ -130,7 +136,7 @@ func loadVerifiers(pgi bool, td string) provider.Verifier {
 	}
 	log.Printf("loaded verifier for GitHub Sigstore: %s", td)
 
-	return &mv
+	return &mv, nil
 }
 
 // validate intercepts an external data request from OPA Gatekeeper to
