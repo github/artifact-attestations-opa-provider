@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-  pull_request: {}
 
 permissions: {}
 
@@ -23,21 +22,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Set tag
-        run: |
-          if [ "${{ github.head_ref }}" = "main" ]; then
-              TAG=latest
-          else
-              TAG=${{ github.head_ref }}
-          fi
-          echo "TAG=${TAG}" >> $GITHUB_ENV
       - name: Build and push image
         id: push
         uses: docker/build-push-action@v5.0.0
         with:
           context: .
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
       - name: Attest
         uses: actions/attest-build-provenance@v2
         id: attest
