@@ -33,11 +33,11 @@ docker:
 
 .PHONY: docker-arm
 docker-arm:
-       docker build --platform linux/arm64 -t ${IMG_ARM} -f Dockerfile.arm .
+	docker build --platform linux/arm64 -t ${IMG_ARM} -f Dockerfile.arm .
 
 .PHONY: kind-load-image-arm
 kind-load-image:
-       kind load docker-image ${IMG} --name ${CLUSTER}
+	kind load docker-image ${IMG} --name ${CLUSTER}
 
 .PHONY: test-rego
 test-rego:
