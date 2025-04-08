@@ -107,7 +107,7 @@ func loadCustomVerifier(repo, root, td string) (provider.Verifier, error) {
 	return v, nil
 }
 
-// loadVerfiers returns the default verifiers. If pgi is true and tr is
+// loadVerifiers returns the default verifiers. If pgi is true and tr is
 // the empty string, pgi and gh verifiers are returned.
 // if the provided trust domain is set, only gh verifier is returend,
 // with the set trust domain.
