@@ -29,7 +29,15 @@ fmt:
 
 .PHONY: docker
 docker:
-	docker build -t ${IMG} .
+	docker build --platform linux/arm64 -t ${IMG} .
+
+.PHONY: docker-arm
+docker-arm:
+       docker build --platform linux/arm64 -t ${IMG_ARM} -f Dockerfile.arm .
+
+.PHONY: kind-load-image-arm
+kind-load-image:
+       kind load docker-image ${IMG} --name ${CLUSTER}
 
 .PHONY: test-rego
 test-rego:
