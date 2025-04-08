@@ -30,3 +30,7 @@ fmt:
 .PHONY: docker
 docker:
 	docker build -t ${IMG} .
+
+.PHONY: test-rego
+test-rego:
+	cd rego && opa test . -v
