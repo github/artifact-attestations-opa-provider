@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -38,6 +39,10 @@ type transport struct {
 	p *provider.Provider
 }
 
+func init() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile | log.LUTC)
+}
+
 func main() {
 	var kc *authn.KeyChainProvider
 	var v provider.Verifier
@@ -46,9 +51,15 @@ func main() {
 	flag.Parse()
 
 	if *tufRepo != "" && *tufRoot != "" {
-		v = loadCustomVerifier(*tufRepo, *tufRoot, *trustDomain)
+		if v, err = loadCustomVerifier(*tufRepo,
+			*tufRoot,
+			*trustDomain); err != nil {
+			log.Fatal(err)
+		}
 	} else {
-		v = loadVerifier(!*noPGI, *trustDomain)
+		if v, err = loadVerifiers(!*noPGI, *trustDomain); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
@@ -68,16 +79,16 @@ func main() {
 	var cf = filepath.Join(*certsDir, certName)
 	var kf = filepath.Join(*certsDir, keyName)
 
-	fmt.Println("starting server...")
+	log.Println("starting server...")
 	if err = srv.ListenAndServeTLS(cf, kf); err != nil {
-		panic(err)
+		log.Fatalf("failed to start HTTP server: %v", err)
 	}
 }
 
 // loadCustomVerifier loads a user provided TUF root.
 // Currently only verificatoin options with RFC3161 signed timestamps
 // are supported.
-func loadCustomVerifier(repo, root, td string) provider.Verifier {
+func loadCustomVerifier(repo, root, td string) (provider.Verifier, error) {
 	var rb []byte
 	var v *verifier.Verifier
 	var vo = []verify.VerifierOption{
@@ -86,21 +97,21 @@ func loadCustomVerifier(repo, root, td string) provider.Verifier {
 	var err error
 
 	if rb, err = os.ReadFile(root); err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to load verifier: %w", err)
 	}
 
 	if v, err = verifier.New(rb, repo, td, vo); err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to create verifier: %w", err)
 	}
 
-	return v
+	return v, nil
 }
 
-// loadVerfier returns the default verifiers. If pgi is true and tr is
+// loadVerifiers returns the default verifiers. If pgi is true and tr is
 // the empty string, pgi and gh verifiers are returned.
 // if the provided trust domain is set, only gh verifier is returend,
 // with the set trust domain.
-func loadVerifier(pgi bool, td string) provider.Verifier {
+func loadVerifiers(pgi bool, td string) (provider.Verifier, error) {
 	var mv = verifier.Multi{
 		V: map[string]*verifier.Verifier{},
 	}
@@ -110,19 +121,22 @@ func loadVerifier(pgi bool, td string) provider.Verifier {
 	// only load PGI if no tenant's trust domain is selected
 	if pgi && td == "" {
 		if v, err = verifier.PGIVerifier(); err != nil {
-			panic(err)
+			return nil, fmt.Errorf("failed to load PGI verifier: %w", err)
 		}
 		mv.V[verifier.PublicGoodIssuer] = v
-		fmt.Println("loaded verfier for public good Sigstore")
+		log.Println("loaded verifier for public good Sigstore")
 	}
 
 	if v, err = verifier.GHVerifier(td); err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to load GitHub verifier: %w", err)
 	}
 	mv.V[verifier.GitHubIssuer] = v
-	fmt.Println("loaded verfier for GitHub Sigstore")
+	if td == "" {
+		td = "dotcom"
+	}
+	log.Printf("loaded verifier for GitHub Sigstore: %s", td)
 
-	return &mv
+	return &mv, nil
 }
 
 // validate intercepts an external data request from OPA Gatekeeper to
@@ -163,10 +177,10 @@ func sendResponse(w http.ResponseWriter, r *externaldata.ProviderResponse) {
 			msg,
 			r.Response.SystemError)
 	}
-	fmt.Printf("%s\n", msg)
+	log.Print(msg)
 
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(r); err != nil {
-		panic(err)
+		log.Printf("ERROR: failed to write response: %v", err)
 	}
 }

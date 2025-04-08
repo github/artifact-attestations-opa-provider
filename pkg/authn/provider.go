@@ -2,7 +2,7 @@ package authn
 
 import (
 	"context"
-	"fmt"
+	"log"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/authn/k8schain"
@@ -22,7 +22,7 @@ type KeyChainProvider struct {
 // references are provided, the default keychain is will be used for further
 // requests to get a key chain.
 func NewKeyChainProvider(ns string, ips []string) *KeyChainProvider {
-	fmt.Printf("configure authn with image pull secrets %+v for namespace %s\n",
+	log.Printf("configure authn with image pull secrets %+v for namespace %s",
 		ips, ns)
 
 	return &KeyChainProvider{
@@ -45,7 +45,7 @@ func (k *KeyChainProvider) KeyChain(ctx context.Context) (authn.Keychain, error)
 		ImagePullSecrets: k.imagePullSecrets,
 	})
 	if err != nil {
-		fmt.Printf("can't add kubernetes key chain: %s\n", err)
+		log.Printf("WARN: can't add kubernetes key chain: %s", err)
 	} else {
 		kcs = append(kcs, kc)
 	}
@@ -55,7 +55,7 @@ func (k *KeyChainProvider) KeyChain(ctx context.Context) (authn.Keychain, error)
 		Namespace: k.namespace,
 	})
 	if err != nil {
-		fmt.Printf("can't add k8schain key chain: %s\n", err)
+		log.Printf("WARN: can't add k8schain key chain: %s", err)
 	} else {
 		kcs = append(kcs, kc)
 	}
