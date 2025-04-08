@@ -3,13 +3,15 @@ package policies
 fromOrg (resp, orgs) if {
    some i, j, k, l
    orgUri := resp.responses[i][j][k].signature.certificate.sourceRepositoryOwnerURI
+   # Prefix the org name with / before doing comparisson
    endswith(orgUri, concat("", ["/", orgs[l]]))
 }
 
 fromRepo (resp, repos) if {
-   some i
-   uri := resp.responses[_][_][_].signature.certificate.sourceRepositoryURI
-   endswith(uri, concat("", ["/", repos[i]]))
+   some i, j, k, l
+   uri := resp.responses[i][j][k].signature.certificate.sourceRepositoryURI
+   # Prefix the repo name with / before doing comparisson
+   endswith(uri, concat("", ["/", repos[l]]))
 }
 
 fromOrgAndSignerRepo(resp, orgs, signerRepos) if {

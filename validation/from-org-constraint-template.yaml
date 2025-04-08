@@ -39,5 +39,6 @@ spec:
         fromOrg(resp, orgs) {
           some i, j, k, l
           orgUri := resp.responses[i][j][k].signature.certificate.sourceRepositoryOwnerURI
+          # Prefix the org name with / before doing comparisson
           endswith(orgUri, concat("", ["/", orgs[l]]))
         }
