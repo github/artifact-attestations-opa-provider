@@ -2,6 +2,9 @@ package policies
 
 fromOrg (resp, orgs) if {
    some i, j, k, l
+   provenance := "https://slsa.dev/provenance/v1"
+
+   provenance == resp.responses[i][j][k].statement.predicateType
    orgUri := resp.responses[i][j][k].signature.certificate.sourceRepositoryOwnerURI
    # Prefix the org name with / before doing comparisson
    endswith(orgUri, concat("", ["/", orgs[l]]))
@@ -9,6 +12,9 @@ fromOrg (resp, orgs) if {
 
 fromRepo (resp, repos) if {
    some i, j, k, l
+   provenance := "https://slsa.dev/provenance/v1"
+
+   provenance == resp.responses[i][j][k].statement.predicateType
    uri := resp.responses[i][j][k].signature.certificate.sourceRepositoryURI
    # Prefix the repo name with / before doing comparisson
    endswith(uri, concat("", ["/", repos[l]]))
@@ -16,6 +22,9 @@ fromRepo (resp, repos) if {
 
 fromOrgAndSignerRepo(resp, orgs, signerRepos) if {
    some i, j, k, l, m
+   provenance := "https://slsa.dev/provenance/v1"
+
+   provenance == resp.responses[i][j][k].statement.predicateType
    orgUri := resp.responses[i][j][k].signature.certificate.sourceRepositoryOwnerURI
    signerUri := resp.responses[i][j][k].signature.certificate.buildSignerURI
    # Verify source owner org is allowed

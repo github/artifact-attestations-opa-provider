@@ -38,6 +38,9 @@ spec:
 
         fromOrgWithSigner(resp, orgs, signerRepos) {
           some i, j, k, l, m
+          provenance := "https://slsa.dev/provenance/v1"
+
+          provenance == resp.responses[i][j][k].statement.predicateType
           orgUri := resp.responses[i][j][k].signature.certificate.sourceRepositoryOwnerURI
           signerUri := resp.responses[i][j][k].signature.certificate.buildSignerURI
           # Verify source owner org is allowed
@@ -47,7 +50,7 @@ spec:
           # find the occurence of `/.github/` and trim everything after it
           p := indexof(signerUri, "/.github/")
           signerRepoTrim := substring(signerUri, 0, p)
-          # add back the / prefix to get proper delimiter when doing comparison
+          # add back the / prefix to get proper delimiter when doing comparisson
           signerRepo := concat("", ["/", signerRepoTrim])
           endswith(signerRepo, concat("", ["/", signerRepos[m]]))
         }

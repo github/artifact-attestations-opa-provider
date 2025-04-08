@@ -38,6 +38,9 @@ spec:
 
         fromRepo(resp, repos) {
           some i, j, k, l
+          provenance := "https://slsa.dev/provenance/v1"
+
+          provenance == resp.responses[i][j][k].statement.predicateType
           uri := resp.responses[i][j][k].signature.certificate.sourceRepositoryURI
           # Prefix the repo name with / before doing comparisson
           endswith(uri, concat("", ["/", repos[l]]))

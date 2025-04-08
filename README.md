@@ -180,6 +180,15 @@ The following three examples are provided:
    originating from a list of organizations, and built with a reusable
    workflow from a list of provided repositories.
 
+Assuming the policy for verifying images originating from a a specific
+repository is updated to contain the expected repositories, apply
+them to OPA Gatekeeper with the following command:
+
+```
+$ kubectl apply -f validation/from-repo-constraint-template.yaml
+$ kubectl apply -f validation/from-repo-constraint.yaml
+```
+
 ## Uninstall
 
 ```
