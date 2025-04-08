@@ -38,7 +38,7 @@ spec:
 
         fromOrgWithSigner(resp, orgs, signerRepos) {
           some i, j, k, l, m
-          orgUri :=    resp.responses[i][j][k].signature.certificate.sourceRepositoryOwnerURI
+          orgUri := resp.responses[i][j][k].signature.certificate.sourceRepositoryOwnerURI
           signerUri := resp.responses[i][j][k].signature.certificate.buildSignerURI
           # Verify source owner org is allowed
           endswith(orgUri, concat("", ["/", orgs[l]]))
