@@ -132,9 +132,9 @@ Gatekeeper with normal [constraint
 objects](https://open-policy-agent.github.io/gatekeeper/website/docs/constrainttemplates).
 
 > [!NOTE]
-> OPA Gatekeeper have a hard timeout on 3 seconds, which include the
+> OPA Gatekeeper has a hard timeout on 3 seconds, which include the
 > time for the external data provider. Be sure that you don't have
-> unneccesary attestations stored in the OCI registry as it may impact
+> unnecessary attestations stored in the OCI registry as it may impact
 > the duration so that a timeout can occur.
 
 ```mermaid
