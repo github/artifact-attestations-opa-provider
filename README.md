@@ -129,7 +129,9 @@ where the data can be used during policy evaluation. This means only
 the cryptographic properties are verified within the Artifact
 Attestations OPA provider, the rego policy is evaluated by OPA
 Gatekeeper with normal [constraint
-objects](https://open-policy-agent.github.io/gatekeeper/website/docs/constrainttemplates).
+objects](https://open-policy-agent.github.io/gatekeeper/website/docs/constrainttemplates). In
+the constraint configuration is where affected resources and
+namespaces are configured.
 
 > [!NOTE]
 > OPA Gatekeeper has a hard timeout on 3 seconds, which include the
