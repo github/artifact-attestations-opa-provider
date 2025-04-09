@@ -3,6 +3,6 @@ serviceAccount: opa-provider-sa
 port: 8090
 imagePullSecrets: aa-login-secret
 provider:
-  timeout: 10
+  timeout: 5
   tls:
     caBundle: ""
