@@ -38,3 +38,12 @@ fromOrgAndSignerRepo(resp, orgs, signerRepos) if {
    signerRepo := concat("", ["/", signerRepoTrim])
    endswith(signerRepo, concat("", ["/", signerRepos[m]]))
 }
+
+# This is an example showing how custom attestations can be verified
+customAttestation(resp, val) if {
+   some i, j, k
+   custom := "https://example.com/custom/v1"
+
+   custom == resp.responses[i][j][k].statement.predicateType
+   val == resp.responses[i][j][k].statement.predicate.key1
+}

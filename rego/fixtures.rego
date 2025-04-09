@@ -290,3 +290,152 @@ non_provenance := {
   "status_code": 200,
   "system_error": ""
 }
+
+multiple := {
+  "errors": [],
+  "responses": [
+    [
+      "ghcr.io/octoorg/octorepo:latest",
+      [
+        {
+          "mediaType": "application/vnd.dev.sigstore.verificationresult+json;version=0.1",
+          "signature": {
+            "certificate": {
+              "buildConfigDigest": "b2264359fefbac6bc630767b9a0a9f6201fe5ed1",
+              "buildConfigURI": "https://github.com/octoorg/octorepo/.github/workflows/build.yaml@refs/heads/main",
+              "buildSignerDigest": "b2264359fefbac6bc630767b9a0a9f6201fe5ed1",
+              "buildSignerURI": "https://github.com/octoorg/octorepo/.github/workflows/build.yaml@refs/heads/main",
+              "buildTrigger": "workflow_dispatch",
+              "certificateIssuer": "CN=Fulcio Intermediate l2,O=GitHub\\, Inc.",
+              "githubWorkflowName": "Build image w/ attestation",
+              "githubWorkflowRef": "refs/heads/main",
+              "githubWorkflowRepository": "octoorg/octorepo",
+              "githubWorkflowSHA": "b2264359fefbac6bc630767b9a0a9f6201fe5ed1",
+              "githubWorkflowTrigger": "workflow_dispatch",
+              "issuer": "https://token.actions.githubusercontent.com",
+              "runInvocationURI": "https://github.com/octoorg/octorepo/actions/runs/14336594256/attempts/1",
+              "runnerEnvironment": "github-hosted",
+              "sourceRepositoryDigest": "b2264359fefbac6bc630767b9a0a9f6201fe5ed1",
+              "sourceRepositoryIdentifier": "478525803",
+              "sourceRepositoryOwnerIdentifier": "10762948",
+              "sourceRepositoryOwnerURI": "https://github.com/octoorg",
+              "sourceRepositoryRef": "refs/heads/main",
+              "sourceRepositoryURI": "https://github.com/octoorg/octorepo",
+              "sourceRepositoryVisibilityAtSigning": "private",
+              "subjectAlternativeName": "https://github.com/octoorg/octorepo/.github/workflows/build.yaml@refs/heads/main"
+            }
+          },
+          "statement": {
+            "_type": "https://in-toto.io/Statement/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://actions.github.io/buildtypes/workflow/v1",
+                "externalParameters": {
+                  "workflow": {
+                    "path": ".github/workflows/build.yaml",
+                    "ref": "refs/heads/main",
+                    "repository": "https://github.com/octoorg/octorepo"
+                  }
+                },
+                "internalParameters": {
+                  "github": {
+                    "event_name": "workflow_dispatch",
+                    "repository_id": "478525803",
+                    "repository_owner_id": "10762948",
+                    "runner_environment": "github-hosted"
+                  }
+                },
+                "resolvedDependencies": [
+                  {
+                    "digest": {
+                      "gitCommit": "b2264359fefbac6bc630767b9a0a9f6201fe5ed1"
+                    },
+                    "uri": "git+https://github.com/octoorg/octorepo@refs/heads/main"
+                  }
+                ]
+              },
+              "runDetails": {
+                "builder": {
+                  "id": "https://github.com/octoorg/octorepo/.github/workflows/build.yaml@refs/heads/main"
+                },
+                "metadata": {
+                  "invocationId": "https://github.com/octoorg/octorepo/actions/runs/14336594256/attempts/1"
+                }
+              }
+            },
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "subject": [
+              {
+                "digest": {
+                  "sha256": "da32724a354067b3cc664b077d130962fdcf88573f2c2b35d034b2116ea37f59"
+                },
+                "name": "ghcr.io/octoorg/octorepo"
+              }
+            ]
+          },
+          "verifiedTimestamps": [
+            {
+              "timestamp": "2025-04-08T14:47:54Z",
+              "type": "TimestampAuthority",
+              "uri": "timestamp.githubapp.com"
+            }
+          ]
+        },
+        {
+          "mediaType": "application/vnd.dev.sigstore.verificationresult+json;version=0.1",
+          "signature": {
+            "certificate": {
+              "buildConfigDigest": "b2264359fefbac6bc630767b9a0a9f6201fe5ed1",
+              "buildConfigURI": "https://github.com/octoorg/octorepo/.github/workflows/build.yaml@refs/heads/main",
+              "buildSignerDigest": "b2264359fefbac6bc630767b9a0a9f6201fe5ed1",
+              "buildSignerURI": "https://github.com/octoorg/octorepo/.github/workflows/build.yaml@refs/heads/main",
+              "buildTrigger": "workflow_dispatch",
+              "certificateIssuer": "CN=Fulcio Intermediate l2,O=GitHub\\, Inc.",
+              "githubWorkflowName": "Build image w/ attestation",
+              "githubWorkflowRef": "refs/heads/main",
+              "githubWorkflowRepository": "octoorg/octorepo",
+              "githubWorkflowSHA": "b2264359fefbac6bc630767b9a0a9f6201fe5ed1",
+              "githubWorkflowTrigger": "workflow_dispatch",
+              "issuer": "https://token.actions.githubusercontent.com",
+              "runInvocationURI": "https://github.com/octoorg/octorepo/actions/runs/14336594256/attempts/1",
+              "runnerEnvironment": "github-hosted",
+              "sourceRepositoryDigest": "b2264359fefbac6bc630767b9a0a9f6201fe5ed1",
+              "sourceRepositoryIdentifier": "478525803",
+              "sourceRepositoryOwnerIdentifier": "10762948",
+              "sourceRepositoryOwnerURI": "https://github.com/octoorg",
+              "sourceRepositoryRef": "refs/heads/main",
+              "sourceRepositoryURI": "https://github.com/octoorg/octorepo",
+              "sourceRepositoryVisibilityAtSigning": "private",
+              "subjectAlternativeName": "https://github.com/octoorg/octorepo/.github/workflows/build.yaml@refs/heads/main"
+            }
+          },
+          "statement": {
+            "_type": "https://in-toto.io/Statement/v1",
+            "predicate": {
+              "key1": "value1",
+              "key2": "value2"
+            },
+            "predicateType": "https://example.com/custom/v1",
+            "subject": [
+              {
+                "digest": {
+                  "sha256": "da32724a354067b3cc664b077d130962fdcf88573f2c2b35d034b2116ea37f59"
+                },
+                "name": "ghcr.io/octoorg/octorepo"
+              }
+            ]
+          },
+          "verifiedTimestamps": [
+            {
+              "timestamp": "2025-04-08T14:47:58Z",
+              "type": "TimestampAuthority",
+              "uri": "timestamp.githubapp.com"
+            }
+          ]
+        }
+      ]
+    ]
+  ],
+  "status_code": 200,
+  "system_error": ""
+}

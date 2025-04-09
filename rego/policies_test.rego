@@ -86,6 +86,18 @@ test_with_signer_invalid if {
     not policies.fromOrgAndSignerRepo(fixtures.reusable, ["octoorg"], ["ctoorg/octorepo", "octoorg/octorep", "octoor/octorepo", "octoorg/ctorepo"])
 }
 
+# Make sure that a JSON doc matching the provenance does not pass
+# if the predicate type is differing
 test_with_signer_non_provenance if {
     not policies.fromOrgAndSignerRepo(fixtures.non_provenance, ["octoorg"], ["buildorg/build-scripts"])
+}
+
+# If multiple attestations are returned, the verification should still pass
+test_multiple_attestations if {
+    policies.fromOrgAndSignerRepo(fixtures.multiple, ["octoorg"], ["octoorg/octorepo"])
+}
+
+# Custom attestations should also work
+test_custom_attestation if {
+    policies.customAttestation(fixtures.multiple, "value1")
 }
