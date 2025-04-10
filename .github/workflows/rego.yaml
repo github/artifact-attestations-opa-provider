@@ -27,5 +27,6 @@ jobs:
           make test-rego
 
       - name: Verify constraint files
+        shell: bash
         run: |
-          sh ./scripts/diff_policy.sh
+          ./scripts/diff_policy.sh
