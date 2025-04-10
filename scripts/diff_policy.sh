@@ -11,6 +11,8 @@ diffp() {
     file=$1
     func=$2
 
+    # The regex to match the function definition contains three preceding
+    # whitespaces to not match the location where it's called.
     got=`perl -0777 -ne "print \\$1 if /(   ${func}.*?})/s" validation/${file} \
          | perl -ne '$. > 1 && print'| tr -d ' \n'`
     want=`perl -0777 -ne "print \\$1 if /(${func}.*?})/s" rego/policies.rego \
