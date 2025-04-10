@@ -44,6 +44,6 @@ spec:
           provenance == resp.responses[i][j][k].statement.predicateType
           issuer == resp.responses[i][j][k].signature.certificate.issuer
           uri := resp.responses[i][j][k].signature.certificate.sourceRepositoryURI
-          # Prefix the repo name with / before doing comparisson
+          # Prefix the repo name with / before doing comparison
           endswith(uri, concat("", ["/", repos[l]]))
         }
