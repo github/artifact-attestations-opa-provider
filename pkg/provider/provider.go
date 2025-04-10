@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -82,7 +83,10 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 			return ErrorResponse(fmt.Sprintf("ERROR: ParseReference(%q): %v", key, err))
 		}
 
+		start := time.Now()
 		b, h, err := fetcher.BundleFromName(ref, ro)
+		dur := time.Since(start)
+		log.Printf("validate: fetched OCI bundles in %s", dur)
 		if err != nil {
 			log.Printf("validate: error fetching bundles: %s", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: FromBundle(%q): %v", key, err))

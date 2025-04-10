@@ -114,6 +114,51 @@ $ helm install artifact-attestations-opa-provider charts/artifact-attestations-o
 
 ## Verification
 
+### Architecture
+
+GitHub Artifact Attestations OPA provider is a regular [OPA Gatekeeper
+external data
+provider](https://open-policy-agent.github.io/gatekeeper/website/docs/externaldata).
+
+It works by interacting with OCI registries to fetch [Sigstore
+bundles](https://github.com/sigstore/architecture-docs/blob/main/client-spec.md#5-serialization-and-wire-format)
+containing attestations for the container to be deployed. The Artifact
+Attestations OPA provider will fetch the bundles, verify the
+cryptographic integrity, and if valid, return them to OPA Gatekeeper,
+where the data can be used during policy evaluation. This means only
+the cryptographic properties are verified within the Artifact
+Attestations OPA provider, the rego policy is evaluated by OPA
+Gatekeeper with normal [constraint
+objects](https://open-policy-agent.github.io/gatekeeper/website/docs/constrainttemplates). In
+the constraint configuration is where affected resources and
+namespaces are configured.
+
+> [!NOTE]
+> OPA Gatekeeper has a hard timeout on 3 seconds, which include the
+> time for the external data provider. Be sure that you don't have
+> unnecessary attestations stored in the OCI registry as it may impact
+> the duration so that a timeout can occur.
+
+```mermaid
+sequenceDiagram
+    participant k8s as K8s
+    participant opag as OPA Gatekeeper
+    participant opadp as Artifact Attestations OPA Provider
+    participant ocir as OCI Registry
+
+    k8s->>opag: Admit OCI image ref?
+    opag->>opadp: Validate OCI image ref
+    opadp->>ocir: Fetch attestations for image ref
+    ocir->>opadp: Zero or more attestations
+    opadp->>opadp: Verify integrity and authenticity of attestations
+    opadp->>opag: Verified attestations
+    opag->>opag: Perform rego policy evaluation on attestations
+    opag->>k8s: Policy decision
+
+```
+
+### Rego policies
+
 Three examples are provided that can be used as references when
 building out the policy.
 
