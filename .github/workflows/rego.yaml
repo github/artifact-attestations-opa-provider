@@ -25,3 +25,7 @@ jobs:
       - name: Test
         run: |
           make test-rego
+
+      - name: Verify constraint files
+        run: |
+          sh ./scripts/diff_policy.sh

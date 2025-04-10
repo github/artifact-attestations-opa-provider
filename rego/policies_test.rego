@@ -8,6 +8,11 @@ test_from_org_pass if {
     policies.fromOrg(fixtures.octo_org, ["unkown", "octoorg"])
 }
 
+# Should fail when issuer is not matching
+test_from_org_issuer if {
+    not policies.fromOrg(fixtures.custom_issuer, ["unkown", "octoorg"])
+}
+
 # Empty org should fail
 test_from_org_empty if {
     not policies.fromOrg(fixtures.octo_org, [""])
@@ -31,6 +36,11 @@ test_from_repo_pass if {
     policies.fromRepo(fixtures.octo_org, ["unkown/unkown", "octoorg/octorepo"])
 }
 
+# Should fail when issuer is not matching
+test_from_repo_issuer if {
+    not policies.fromRepo(fixtures.custom_issuer, ["unkown/unkown", "octoorg/octorepo"])
+}
+
 # Empty repo shoud fail
 test_from_repo_empty if {
     not policies.fromRepo(fixtures.octo_org, [""])
@@ -51,50 +61,55 @@ test_from_repo_non_provenance if {
 
 # Same repo and signer
 test_with_signer_pass if {
-    policies.fromOrgAndSignerRepo(fixtures.octo_org, ["unknown", "octoorg"], ["unkown/octorepo", "octoorg/octorepo"])
+    policies.fromOrgWithSignerRepo(fixtures.octo_org, ["unknown", "octoorg"], ["unkown/octorepo", "octoorg/octorepo"])
 }
 
 # With a signer from a different org
 test_with_signer_pass if {
-    policies.fromOrgAndSignerRepo(fixtures.reusable, ["unknown", "octoorg"], ["octoorg/octorepo", "buildorg/build-scripts"])
+    policies.fromOrgWithSignerRepo(fixtures.reusable, ["unknown", "octoorg"], ["octoorg/octorepo", "buildorg/build-scripts"])
+}
+
+# Should fail when issuer is not matching
+test_with_signer_issuer if {
+    not policies.fromOrgWithSignerRepo(fixtures.custom_issuer, ["unknown", "octoorg"], ["octoorg/octorepo", "buildorg/build-scripts"])
 }
 
 # Empty input
 test_with_signer_empty if {
-    not policies.fromOrgAndSignerRepo(fixtures.reusable, [], [])
+    not policies.fromOrgWithSignerRepo(fixtures.reusable, [], [])
 }
 
 test_with_signer_empty if {
-    not policies.fromOrgAndSignerRepo(fixtures.reusable, [""], [])
+    not policies.fromOrgWithSignerRepo(fixtures.reusable, [""], [])
 }
 
 test_with_signer_empty if {
-    not policies.fromOrgAndSignerRepo(fixtures.reusable, [], [""])
+    not policies.fromOrgWithSignerRepo(fixtures.reusable, [], [""])
 }
 
 test_with_signer_empty if {
-    not policies.fromOrgAndSignerRepo(fixtures.reusable, [""], [""])
+    not policies.fromOrgWithSignerRepo(fixtures.reusable, [""], [""])
 }
 
 # Verify that no prefix weakness exists for the orgs
 test_with_signer_invalid if {
-    not policies.fromOrgAndSignerRepo(fixtures.reusable, ["unkown", "ctoorg", "octoor", "aoctoorg", "octoorga"], ["octoorg/octorepo"])
+    not policies.fromOrgWithSignerRepo(fixtures.reusable, ["unkown", "ctoorg", "octoor", "aoctoorg", "octoorga"], ["octoorg/octorepo"])
 }
 
 # Verify that no prefix weakness exists for the signer repos
 test_with_signer_invalid if {
-    not policies.fromOrgAndSignerRepo(fixtures.reusable, ["octoorg"], ["ctoorg/octorepo", "octoorg/octorep", "octoor/octorepo", "octoorg/ctorepo"])
+    not policies.fromOrgWithSignerRepo(fixtures.reusable, ["octoorg"], ["ctoorg/octorepo", "octoorg/octorep", "octoor/octorepo", "octoorg/ctorepo"])
 }
 
 # Make sure that a JSON doc matching the provenance does not pass
 # if the predicate type is differing
 test_with_signer_non_provenance if {
-    not policies.fromOrgAndSignerRepo(fixtures.non_provenance, ["octoorg"], ["buildorg/build-scripts"])
+    not policies.fromOrgWithSignerRepo(fixtures.non_provenance, ["octoorg"], ["buildorg/build-scripts"])
 }
 
 # If multiple attestations are returned, the verification should still pass
 test_multiple_attestations if {
-    policies.fromOrgAndSignerRepo(fixtures.multiple, ["octoorg"], ["octoorg/octorepo"])
+    policies.fromOrgWithSignerRepo(fixtures.multiple, ["octoorg"], ["octoorg/octorepo"])
 }
 
 # Custom attestations should also work
