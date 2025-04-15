@@ -19,7 +19,7 @@ spec:
       serviceAccountName: {{ .Values.serviceAccount }}
       automountServiceAccountToken: true
       containers:
-      - image: github/artifact-attestations-opa-provider:dev
+      - image: ghcr.io/github/artifact-attestations-opa-provider:dev
         imagePullPolicy: IfNotPresent
         name: artifact-attestations-opa-provider
         securityContext:
