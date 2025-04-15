@@ -25,13 +25,12 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Set tag
         run: |
-          BRANCH=`git branch --show-current`
-          if [ "${BRANCH}" = "main" ]; then
+          if [ "${{ github.head_ref }}" = "main" ]; then
               TAG=latest
           else
-              TAG=${BRANCH}
+              TAG=${ github.head_ref }}
           fi
-          export TAG
+          echo "TAG=${TAG}" >> $GITHUB_ENV
       - name: Build and push image
         id: push
         uses: docker/build-push-action@v6.15.0
