@@ -28,7 +28,7 @@ jobs:
           if [ "${{ github.head_ref }}" = "main" ]; then
               TAG=latest
           else
-              TAG=${ github.head_ref }}
+              TAG=${{ github.head_ref }}
           fi
           echo "TAG=${TAG}" >> $GITHUB_ENV
       - name: Build and push image
