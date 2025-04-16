@@ -1,4 +1,4 @@
-REPOSITORY ?= github/artifact-attestations-opa-provider
+REPOSITORY ?= ghcr.io/github/artifact-attestations-opa-provider
 TAG ?= dev
 IMG := $(REPOSITORY):$(TAG)
 
