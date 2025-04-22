@@ -184,7 +184,7 @@ The examples are also defined in [policies.rego](rego/policies.rego)
 with tests, and example data. An example policy for working with a
 custom attestation type is also provided.
 
-Assuming the policy for verifying images originating from a a specific
+Assuming the policy for verifying images originating from a specific
 repository is updated to contain the expected repositories, apply
 them to OPA Gatekeeper with the following command:
 
