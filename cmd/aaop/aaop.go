@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sigstore/sigstore-go/pkg/verify"
 
 	"github.com/github/artifact-attestations-opa-provider/pkg/authn"
+	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 	"github.com/github/artifact-attestations-opa-provider/pkg/provider"
 	"github.com/github/artifact-attestations-opa-provider/pkg/verifier"
 )
@@ -28,6 +30,7 @@ var (
 	ns          = flag.String("namespace", "", "namespace the pod runs in")
 	ips         = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registrires")
 	port        = flag.String("port", "8080", "port to listen to")
+	metricsPort = flag.String("metrics-port", "9090", "port to listen to for metrics")
 )
 
 const (
@@ -62,24 +65,44 @@ func main() {
 		}
 	}
 
+	// Start the metrics server
+	go func() {
+		var mm = http.NewServeMux()
+		mm.Handle("/metrics", promhttp.Handler())
+
+		var promSrv = &http.Server{
+			Addr:              fmt.Sprintf(":%s", *metricsPort),
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			ReadHeaderTimeout: 10 * time.Second,
+			Handler:           mm,
+		}
+		log.Printf("starting Prometheus metrics server@%s...\n", promSrv.Addr)
+		if err := promSrv.ListenAndServe(); err != nil {
+			log.Fatalf("failed to start metrics server: %v", err)
+		}
+	}()
+
 	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
 	var p = provider.New(v, kc)
 	var t = transport{
 		p: p,
 	}
+	var sm = http.NewServeMux()
+	sm.HandleFunc("/", t.validate)
 
 	var srv = &http.Server{
 		Addr:              fmt.Sprintf(":%s", *port),
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
+		Handler:           sm,
 	}
 
-	http.HandleFunc("/", t.validate)
 	var cf = filepath.Join(*certsDir, certName)
 	var kf = filepath.Join(*certsDir, keyName)
 
-	log.Println("starting server...")
+	log.Printf("starting server@%s...\n", srv.Addr)
 	if err = srv.ListenAndServeTLS(cf, kf); err != nil {
 		log.Fatalf("failed to start HTTP server: %v", err)
 	}
@@ -143,6 +166,8 @@ func loadVerifiers(pgi bool, td string) (provider.Verifier, error) {
 // validate a pod.
 func (t *transport) validate(w http.ResponseWriter, r *http.Request) {
 	var resp *externaldata.ProviderResponse
+	var start = time.Now()
+	var dur time.Duration
 
 	// only accept POST requests
 	if r.Method != http.MethodPost {
@@ -168,6 +193,8 @@ func (t *transport) validate(w http.ResponseWriter, r *http.Request) {
 	resp = t.p.Validate(r.Context(), &providerRequest)
 
 	sendResponse(w, resp)
+	dur = time.Since(start)
+	metrics.AttestationsReqTimer.Observe(dur.Seconds())
 }
 
 func sendResponse(w http.ResponseWriter, r *externaldata.ProviderResponse) {

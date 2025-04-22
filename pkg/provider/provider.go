@@ -14,6 +14,7 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/verify"
 
 	"github.com/github/artifact-attestations-opa-provider/pkg/fetcher"
+	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 )
 
 const (
@@ -86,13 +87,26 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		start := time.Now()
 		b, h, err := fetcher.BundleFromName(ref, ro)
 		dur := time.Since(start)
+		metrics.AttestationsRetrieved.Add(float64(len(b)))
+		metrics.AttestationsPullTimer.Observe(dur.Seconds())
 		log.Printf("validate: fetched OCI bundles in %s", dur)
+
 		if err != nil {
 			log.Printf("validate: error fetching bundles: %s", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: FromBundle(%q): %v", key, err))
 		}
 
-		if res, err = p.v.Verify(b, h); err != nil {
+		start = time.Now()
+		res, err = p.v.Verify(b, h)
+		dur = time.Since(start)
+		metrics.AttestationsVerTimer.Observe(dur.Seconds())
+		metrics.AttestationsVerOk.Add(float64(len(res)))
+		var fail = len(b) - len(res)
+		if fail > 0 {
+			metrics.AttestationsVerFail.Add(float64(fail))
+		}
+
+		if err != nil {
 			log.Printf("validate: error calling verify: %s", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: VerifyImageSignatures(%q): %v", key, err))
 		}
