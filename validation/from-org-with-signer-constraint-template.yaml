@@ -38,7 +38,12 @@ spec:
 
         fromOrgWithSigner(resp, orgs, signerRepos) {
           some i, j, k, l, m
-          orgUri :=    resp.responses[i][j][k].signature.certificate.sourceRepositoryOwnerURI
+          provenance := "https://slsa.dev/provenance/v1"
+          issuer := "https://token.actions.githubusercontent.com"
+
+          provenance == resp.responses[i][j][k].statement.predicateType
+          issuer == resp.responses[i][j][k].signature.certificate.issuer
+          orgUri := resp.responses[i][j][k].signature.certificate.sourceRepositoryOwnerURI
           signerUri := resp.responses[i][j][k].signature.certificate.buildSignerURI
           # Verify source owner org is allowed
           endswith(orgUri, concat("", ["/", orgs[l]]))
