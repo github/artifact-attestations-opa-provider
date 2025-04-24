@@ -38,7 +38,7 @@ var (
 
 	//nolint: revive
 	AttestationsVerTimer = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name: "aaop_attestations_verifcation_timer",
+		Name: "aaop_attestations_verification_timer",
 		Help: "The duration (seconds) for verifying attestations",
 	})
 
