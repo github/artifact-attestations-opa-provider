@@ -62,7 +62,13 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		Kind:       "ProviderResponse",
 	}
 	var kc authn.Keychain
+	var rstart = time.Now()
 	var err error
+
+	defer func() {
+		var dur = time.Since(rstart)
+		metrics.AttestationsReqTimer.Observe(dur.Seconds())
+	}()
 
 	// Get the keychain to be able to access the OCI registry.
 	// If the keychain configured is empty, the default keychain is used
@@ -92,6 +98,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		log.Printf("validate: fetched OCI bundles in %s", dur)
 
 		if err != nil {
+			metrics.AttestationsRetrieveFail.Inc()
 			log.Printf("validate: error fetching bundles: %s", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: FromBundle(%q): %v", key, err))
 		}

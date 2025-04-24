@@ -16,7 +16,6 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/verify"
 
 	"github.com/github/artifact-attestations-opa-provider/pkg/authn"
-	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 	"github.com/github/artifact-attestations-opa-provider/pkg/provider"
 	"github.com/github/artifact-attestations-opa-provider/pkg/verifier"
 )
@@ -166,8 +165,6 @@ func loadVerifiers(pgi bool, td string) (provider.Verifier, error) {
 // validate a pod.
 func (t *transport) validate(w http.ResponseWriter, r *http.Request) {
 	var resp *externaldata.ProviderResponse
-	var start = time.Now()
-	var dur time.Duration
 
 	// only accept POST requests
 	if r.Method != http.MethodPost {
@@ -193,8 +190,6 @@ func (t *transport) validate(w http.ResponseWriter, r *http.Request) {
 	resp = t.p.Validate(r.Context(), &providerRequest)
 
 	sendResponse(w, resp)
-	dur = time.Since(start)
-	metrics.AttestationsReqTimer.Observe(dur.Seconds())
 }
 
 func sendResponse(w http.ResponseWriter, r *externaldata.ProviderResponse) {

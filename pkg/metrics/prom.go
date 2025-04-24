@@ -11,6 +11,11 @@ var (
 		Help: "The total number of attestations retrieved",
 	})
 
+	AttestationsRetrieveFail = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "aaop_attestations_retrieved_fail",
+		Help: "The total number of attestations retrieve failure",
+	})
+
 	AttestationsVerOk = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "aaop_attestations_verified_ok",
 		Help: "The total number of attestations verified",

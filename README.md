@@ -193,6 +193,29 @@ $ kubectl apply -f validation/from-repo-constraint-template.yaml
 $ kubectl apply -f validation/from-repo-constraint.yaml
 ```
 
+## Metrics
+
+The GitHub Artifact Attestations OPA data provider provided Prometheus
+metrics, exposed via `http` at `:9090/metrics`. The port can be
+configured with the `-metrics-port` flag (`9090` is the default).
+
+The metrics exposed beyond the default Prometheus metrics are:
+
+* `aaop_attestations_retrieved_total`: the total number of
+  attestations downloaded from the OCI registry.
+* `aaop_attestations_retrieved_failed`: the total number of
+  failed attestations downloaded from the OCI registry.
+* `aaop_attestations_verified_ok`: the total number of verified
+  attestations.
+* `aaop_attestations_verified_failed`: the total number of
+  attestations that failed to verify.
+* `aaop_attestations_request_timer`: the duration in seconds for
+  the validation webhook.
+* `aaop_attestations_retrieved_timer`: the duration in seconds for the
+   time it takes to download the attestations from the OCI registry.
+* `aaop_attestations_verification_timer`: the duration in seconds for
+  the time it takes to verify the retrieved attestations.
+
 ## Uninstall
 
 ```
