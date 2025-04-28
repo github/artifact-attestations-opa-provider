@@ -71,6 +71,17 @@ in the [validation](validation/) repo:
 > For all rego examples, the org and repo names are just placeholders
 > for the users' real org/repo names.
 
+> [!INFO]
+> The policy for admission (deny or warn) are configured via standard
+> OPA Gatekeeper primitives. See the [constraint
+> file](validation/rsa-demo-constraint.yaml) for details.
+> Beyond the `constraingAction`, namespaces that are included or
+> excluded can be set per the customer's definition.
+> It's important to notice that the entire functionality of OPA
+> Gatekeeper is at the customers' hands. We only provide a data
+> provider that returns the attestation and the verification result,
+> the rest is regular OPA Gatekeeper.
+
 ## 2. Add deployments
 
 1. Deploy without attestation (will fail)
