@@ -71,7 +71,9 @@ in the [validation](validation/) repo:
 > For all rego examples, the org and repo names are just placeholders
 > for the users' real org/repo names.
 
-7. Deploy without attestation (will fail)
+## 2. Add deployments
+
+1. Deploy without attestation (will fail)
 
 ```
 $ kubectl apply -f rsa-demo-deployment-no-attestation.yaml
@@ -83,7 +85,7 @@ Verify that the deployment is not creating any pods:
 $ kubectl describe deployment nginx-no-att
 ```
 
-8. Deploy with attestation (will pass)
+2. Deploy with attestation (will pass)
 
 ```
 $ kubectl apply -f rsa-demo-deployment-attestation.yaml
@@ -95,7 +97,14 @@ Verify that the deployment creates pods
 $ kubectl describe deployment nginx-att
 ```
 
-## Clean up
+## 3. Delete deployments
+
+```
+$ kubectl delete -f rsa-demo-deployment-attestation.yaml
+$ kubectl delete -f rsa-demo-deployment-no-attestation.yaml
+```
+
+## Clean up cluster
 
 ```
 $ kubectl delete -f validation
