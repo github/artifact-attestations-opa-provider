@@ -1,0 +1,49 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sexternaldatafromorg
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sExternalDataFromOrg
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sexternaldata
+
+        violation[{"msg": msg}] {
+          images := [img | img = input.review.object.spec.containers[_].image]
+
+          response := external_data({"provider": "artifact-attestations-opa-provider", "keys": images})
+
+          response_with_error(response)
+
+          msg := sprintf("invalid response: %v", [response])
+        }
+
+        response_with_error(response) {
+          count(response.errors) > 0
+          errs := response.errors[_]
+          contains(errs[1], "_unsigned")
+        }
+
+        response_with_error(response) {
+          count(response.system_error) > 0
+        }
+
+        response_with_error(response) {
+          not fromOrg(response, ["kommendorkapten"])
+        }
+
+        fromOrg(resp, orgs) {
+          some i, j, k, l
+          provenance := "https://slsa.dev/provenance/v1"
+          issuer := "https://token.actions.githubusercontent.com"
+
+          provenance == resp.responses[i][j][k].statement.predicateType
+          issuer == resp.responses[i][j][k].signature.certificate.issuer
+          orgUri := resp.responses[i][j][k].signature.certificate.sourceRepositoryOwnerURI
+          # Prefix the org name with / before doing comparison
+          endswith(orgUri, concat("", ["/", orgs[l]]))
+        }

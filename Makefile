@@ -1,6 +1,7 @@
 REPOSITORY ?= ghcr.io/github/artifact-attestations-opa-provider
 TAG ?= dev
 IMG := $(REPOSITORY):$(TAG)
+CLUSTER = kind
 
 all: aaop
 

@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-att
+spec:
+  selector:
+    matchLabels:
+      app: nginx-att
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: nginx-att
+    spec:
+      containers:
+        - name: nginx-att
+          image: ghcr.io/kommendorkapten/rsademo:att
+      imagePullSecrets:
+        - name: ghcr-fsn

@@ -1,0 +1,12 @@
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sExternalDataFromOrg
+metadata:
+  name: require-build-provenance-from-org
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: ["*"]
+        kinds: ["Pod"]
+    excludedNamespaces: ["provider-system"]
+    namespaces: ["default"]

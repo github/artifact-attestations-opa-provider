@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-no-att
+spec:
+  selector:
+    matchLabels:
+      app: nginx-no-att
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: nginx-no-att
+    spec:
+      containers:
+        - name: nginx-no-att
+          image: ghcr.io/kommendorkapten/rsademo:noatt
