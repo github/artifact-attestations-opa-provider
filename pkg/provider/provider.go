@@ -91,9 +91,9 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		start := time.Now()
-		b, h, err := fetcher.BundleFromName(ref, ro)
+		bundles, hash, err := fetcher.BundleFromName(ref, ro)
 		dur := time.Since(start)
-		metrics.AttestationsRetrieved.Add(float64(len(b)))
+		metrics.AttestationsRetrieved.Add(float64(len(bundles)))
 		metrics.AttestationsPullTimer.Observe(dur.Seconds())
 		log.Printf("validate: fetched OCI bundles in %s", dur)
 
@@ -104,11 +104,11 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		start = time.Now()
-		res, err = p.v.Verify(b, h)
+		res, err = p.v.Verify(bundles, hash)
 		dur = time.Since(start)
 		metrics.AttestationsVerTimer.Observe(dur.Seconds())
 		metrics.AttestationsVerOk.Add(float64(len(res)))
-		var fail = len(b) - len(res)
+		var fail = len(bundles) - len(res)
 		if fail > 0 {
 			metrics.AttestationsVerFail.Add(float64(fail))
 		}
