@@ -72,10 +72,10 @@ in the [validation](validation/) repo:
 > for the users' real org/repo names.
 
 > [!IMPORTANT]
-> The policy for admission (deny or warn) are configured via standard
+> The policy for admission (deny or warn/log) are configured via standard
 > OPA Gatekeeper primitives. See the [constraint
 > file](validation/rsa-demo-constraint.yaml) for details.
-> Beyond the `constraingAction`, namespaces that are included or
+> Beyond the `constraintAction`, namespaces that are included or
 > excluded can be set per the customer's definition.
 > It's important to notice that the entire functionality of OPA
 > Gatekeeper is at the customers' hands. We only provide a data
