@@ -71,7 +71,7 @@ in the [validation](validation/) repo:
 > For all rego examples, the org and repo names are just placeholders
 > for the users' real org/repo names.
 
-> [!INFO]
+> [!IMPORTANT]
 > The policy for admission (deny or warn) are configured via standard
 > OPA Gatekeeper primitives. See the [constraint
 > file](validation/rsa-demo-constraint.yaml) for details.
