@@ -103,6 +103,9 @@ $ kubectl get events | grep webhook
 117s        Warning   FailedCreate                      replicaset/nginx-no-att-6c8766cd45   Error creating: admission webhook "validation.gatekeeper.sh" denied the request: [require-build-provenance-from-org] invalid response: {"errors": [], "responses": [], "status_code": 200, "system_error": "ERROR: FromBundle(\"ghcr.io/kommendorkapten/rsademo:noatt\"): no bundle found in referrers"}
 ```
 
+The `Warning` events are still present if `constraintAction: warn` is
+set.
+
 2. Deploy with attestation (will pass)
 
 ```
