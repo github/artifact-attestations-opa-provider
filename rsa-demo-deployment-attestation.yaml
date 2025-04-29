@@ -15,5 +15,3 @@ spec:
       containers:
         - name: nginx-att
           image: ghcr.io/kommendorkapten/rsademo:att
-      imagePullSecrets:
-        - name: ghcr-fsn
