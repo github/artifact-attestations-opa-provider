@@ -1,12 +1,16 @@
 # GitHub Artifact Attestations OPA Provider
 
-> [!CAUTION]  
-> This project is in an early preview state and contains experimental code. It is under active development and not ready for production use. Breaking changes are likely, and stability or security is not guaranteed. Use at your own risk.
+> [!CAUTION]
+> This project is in an early preview state and contains experimental
+> code. It is under active development and not ready for production
+> use. Breaking changes are likely, and stability or security is not
+> guaranteed. Use at your own risk.
 
-To integrate [OPA Gatekeeper's new ExternalData
+This integrates [OPA Gatekeeper's ExternalData
 feature](https://open-policy-agent.github.io/gatekeeper/website/docs/externaldata)
-with [Artifact attestations](https://github.com/actions/attest) to determine whether
-the images are valid by verifying its signatures.
+with [Artifact attestations](https://github.com/actions/attest) to
+allow for policy evaluation based on image's signed SLSA build
+provenance.
 
 > [!IMPORTANT]
 > For this to work, OPA Gatekeeper must run with
@@ -18,6 +22,19 @@ the images are valid by verifying its signatures.
 * mTLS between OPA Gatekeeper and the external data provider is not
   yet implemented, only server side TLS
 * No offline mode exposed via the helm chart
+
+## Networking
+
+The Artifact Attestations OPA Provider needs to have network access
+to:
+
+* The OCI registry where the containers are stored, to be able to
+  download the SLSA build provenance documents.
+* `https://tuf-repo.github.com` to update and verify the trust root
+  for GitHub's Sigstore instance.
+* `https://tuf-repo-cdn.sigstore.dev` to update and verify the trust
+  root for Sigstore's public good instance (this can be disabled with
+  the `-no-public-good` flag)
 
 ## Installation
 
