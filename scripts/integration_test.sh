@@ -13,7 +13,6 @@ metrics_ok() {
 }
 
 RES=0
-# Example request to the OPA provider
 UNSIGNED_BODY=`cat <<EOF
 {
     "apiVersion": "externaldata.gatekeeper.sh/v1beta1",
@@ -64,7 +63,6 @@ fi
 echo Verifying a signed image
 curl -X POST \
     -H "Content-Type: application/json" \
-    --cacert certs/ca.crt \
     --insecure \
     -d "${SIGNED_BODY}" \
     https://localhost:8080/
