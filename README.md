@@ -1,4 +1,8 @@
 # GitHub Artifact Attestations OPA Provider
+
+> [!CAUTION]  
+> This project is in an early preview state and contains experimental code. It is under active development and not ready for production use. Breaking changes are likely, and stability or security is not guaranteed. Use at your own risk.
+
 To integrate [OPA Gatekeeper's new ExternalData
 feature](https://open-policy-agent.github.io/gatekeeper/website/docs/externaldata)
 with [Artifact attestations](https://github.com/actions/attest) to determine whether
