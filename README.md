@@ -9,7 +9,7 @@
 This integrates [OPA Gatekeeper's ExternalData
 feature](https://open-policy-agent.github.io/gatekeeper/website/docs/externaldata)
 with [Artifact attestations](https://github.com/actions/attest) to
-allow for policiy evaluation based on image's signed SLSA build
+allow for policy evaluation based on image's signed SLSA build
 provenance.
 
 > [!IMPORTANT]
