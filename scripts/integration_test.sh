@@ -5,11 +5,11 @@ set -u
 set -o pipefail
 
 metrics_failed() {
-    curl -s http://localhost:9090/metrics | grep ^aaop_attestations_retrieved_fail | sed 's/aaop_attestations_retrieved_fail //g' | sed 's/\n//g'
+    curl -s http://localhost:9090/metrics | grep ^aaop_attestations_retrieved_fail | sed 's/aaop_attestations_retrieved_fail //g' | tr -d '\n'
 }
 
 metrics_ok() {
-    curl -s http://localhost:9090/metrics | grep ^aaop_attestations_verified_ok | sed 's/aaop_attestations_verified_ok //g' | sed 's/\n//g'
+    curl -s http://localhost:9090/metrics | grep ^aaop_attestations_verified_ok | sed 's/aaop_attestations_verified_ok //g' | tr -d '\n'
 }
 
 RES=0
@@ -43,7 +43,6 @@ sleep 5
 echo Verifying an unsigned image
 curl -X POST \
     -H "Content-Type: application/json" \
-    --cacert certs/ca.crt \
     --insecure \
     -d "${UNSIGNED_BODY}" \
     https://localhost:8080/
