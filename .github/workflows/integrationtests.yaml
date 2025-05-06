@@ -27,3 +27,6 @@ jobs:
       - name: Generate certificates
         run: |
           ./scripts/gen_certs.sh
+      - name: Run tests
+        run: |
+          ./scripts/integration_test.sh
