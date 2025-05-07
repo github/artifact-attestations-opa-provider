@@ -70,14 +70,14 @@ var bundles = map[string]mockBundle{
 type mockVerifier struct {
 }
 
-func (m *mockVerifier) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.VerificationResult, error) {
+func (_ *mockVerifier) Verify(_ []*bundle.Bundle, _ *v1.Hash) ([]*verify.VerificationResult, error) {
 	return nil, nil
 }
 
 type mockKeyChainProvider struct {
 }
 
-func (m *mockKeyChainProvider) KeyChain(ctx context.Context) (authn.Keychain, error) {
+func (_ *mockKeyChainProvider) KeyChain(_ context.Context) (authn.Keychain, error) {
 	return nil, nil
 }
 
@@ -101,7 +101,7 @@ func (m *mockBundleFetcher) BundleFromName(ref name.Reference, remoteOpts []remo
 	return nil, nil, nil
 }
 
-func (m *mockBundleFetcher) GetRemoteOptions(ctx context.Context, kc authn.Keychain) []remote.Option {
+func (_ *mockBundleFetcher) GetRemoteOptions(_ context.Context, _ authn.Keychain) []remote.Option {
 	return nil
 }
 
@@ -164,11 +164,11 @@ func TestVerifyOk(t *testing.T) {
 	assert.NotNil(t, response)
 	assert.Equal(t, apiVersion, response.APIVersion)
 	assert.Equal(t, externaldata.ProviderKind("ProviderResponse"), response.Kind)
-	assert.Equal(t, 1, len(response.Response.Items))
+	assert.Len(t, response.Response.Items, 1)
 	assert.Equal(t, validImageName, response.Response.Items[0].Key)
 	assert.NotNil(t, response.Response.Items[0].Value)
 	assert.Equal(t, "", response.Response.SystemError)
-	assert.Equal(t, 0, len(response.Response.Items[0].Error))
+	assert.Empty(t, response.Response.Items[0].Error)
 }
 
 func TestVerifyWrongDomain(t *testing.T) {
@@ -191,7 +191,7 @@ func TestVerifyWrongDomain(t *testing.T) {
 	assert.NotNil(t, response)
 	assert.Equal(t, apiVersion, response.APIVersion)
 	assert.Equal(t, externaldata.ProviderKind("ProviderResponse"), response.Kind)
-	assert.Equal(t, 1, len(response.Response.Items))
+	assert.Len(t, response.Response.Items, 1)
 	assert.Nil(t, response.Response.Items[0].Value)
 	assert.Equal(t, validImageName, response.Response.Items[0].Key)
 	assert.True(t, strings.HasSuffix(response.Response.Items[0].Error, "_unsigned"))
@@ -218,7 +218,7 @@ func TestInvalidReference(t *testing.T) {
 	assert.NotNil(t, response)
 	assert.Equal(t, apiVersion, response.APIVersion)
 	assert.Equal(t, externaldata.ProviderKind("ProviderResponse"), response.Kind)
-	assert.Equal(t, 0, len(response.Response.Items))
+	assert.Empty(t, response.Response.Items)
 	assert.True(t, strings.HasPrefix(response.Response.SystemError, "ERROR: ParseReference"))
 }
 
@@ -242,6 +242,6 @@ func TestInvalidBundle(t *testing.T) {
 	assert.NotNil(t, response)
 	assert.Equal(t, apiVersion, response.APIVersion)
 	assert.Equal(t, externaldata.ProviderKind("ProviderResponse"), response.Kind)
-	assert.Equal(t, 0, len(response.Response.Items))
+	assert.Empty(t, response.Response.Items)
 	assert.True(t, strings.HasPrefix(response.Response.SystemError, "ERROR: FromBundle"))
 }

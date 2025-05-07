@@ -3,9 +3,10 @@ package verifier
 import (
 	"testing"
 
-	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var okBundle = `
@@ -38,10 +39,10 @@ var okHash = "d57f9212097b86c8d75158ea1d974721e7c6f8c33bd77838b242c8f6a2d21813"
 
 func TestMultiVerifier(t *testing.T) {
 	pgi, err := PGIVerifier()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, pgi)
 	gh, err := GHVerifier("dotcom")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, gh)
 
 	var mv = NewMulti(map[string]*Verifier{
@@ -51,7 +52,7 @@ func TestMultiVerifier(t *testing.T) {
 
 	var b = &bundle.Bundle{}
 	err = b.UnmarshalJSON([]byte(okBundle))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, b)
 
 	var h = &v1.Hash{
@@ -60,8 +61,8 @@ func TestMultiVerifier(t *testing.T) {
 	}
 
 	res, err := mv.Verify([]*bundle.Bundle{b}, h)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Len(t, res, 1)
+	//nolint:protogetter
 	assert.Equal(t, okHash, res[0].Statement.Subject[0].Digest["sha256"])
-
 }
