@@ -199,7 +199,7 @@ func TestVerifyWrongDomain(t *testing.T) {
 	assert.Equal(t, "", response.Response.SystemError)
 }
 
-func TestInvalidReference(t *testing.T) {
+func TestInvalid(t *testing.T) {
 	v, err := verifier.GHVerifier("")
 	require.NoError(t, err)
 	assert.NotNil(t, v)
@@ -207,42 +207,34 @@ func TestInvalidReference(t *testing.T) {
 	bf := &mockBundleFetcher{}
 	provider := New(v, kc, bf)
 
-	request := &externaldata.ProviderRequest{
-		APIVersion: apiVersion,
-		Kind:       "ProviderRequest",
-		Request: externaldata.Request{
-			Keys: []string{"foo+bar"},
+	tests := []struct {
+		image       string
+		errorPrefix string
+	}{
+		{
+			image:       "foo+bar",
+			errorPrefix: "ERROR: ParseReference",
+		},
+		{
+			image:       brokenImageName,
+			errorPrefix: "ERROR: FromBundle",
 		},
 	}
 
-	response := provider.Validate(context.Background(), request)
-	assert.NotNil(t, response)
-	assert.Equal(t, apiVersion, response.APIVersion)
-	assert.Equal(t, externaldata.ProviderKind("ProviderResponse"), response.Kind)
-	assert.Empty(t, response.Response.Items)
-	assert.True(t, strings.HasPrefix(response.Response.SystemError, "ERROR: ParseReference"))
-}
+	for _, tc := range tests {
+		request := &externaldata.ProviderRequest{
+			APIVersion: apiVersion,
+			Kind:       "ProviderRequest",
+			Request: externaldata.Request{
+				Keys: []string{tc.image},
+			},
+		}
 
-func TestInvalidBundle(t *testing.T) {
-	v, err := verifier.GHVerifier("")
-	require.NoError(t, err)
-	assert.NotNil(t, v)
-	kc := &mockKeyChainProvider{}
-	bf := &mockBundleFetcher{}
-	provider := New(v, kc, bf)
-
-	request := &externaldata.ProviderRequest{
-		APIVersion: apiVersion,
-		Kind:       "ProviderRequest",
-		Request: externaldata.Request{
-			Keys: []string{brokenImageName},
-		},
+		response := provider.Validate(context.Background(), request)
+		assert.NotNil(t, response)
+		assert.Equal(t, apiVersion, response.APIVersion)
+		assert.Equal(t, externaldata.ProviderKind("ProviderResponse"), response.Kind)
+		assert.Empty(t, response.Response.Items)
+		assert.True(t, strings.HasPrefix(response.Response.SystemError, tc.errorPrefix))
 	}
-
-	response := provider.Validate(context.Background(), request)
-	assert.NotNil(t, response)
-	assert.Equal(t, apiVersion, response.APIVersion)
-	assert.Equal(t, externaldata.ProviderKind("ProviderResponse"), response.Kind)
-	assert.Empty(t, response.Response.Items)
-	assert.True(t, strings.HasPrefix(response.Response.SystemError, "ERROR: FromBundle"))
 }
