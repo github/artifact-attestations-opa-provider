@@ -85,7 +85,7 @@ func (*mockKeyChainProvider) KeyChain(_ context.Context) (authn.Keychain, error)
 type mockBundleFetcher struct {
 }
 
-func (m *mockBundleFetcher) BundleFromName(ref name.Reference, _ []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
+func (*mockBundleFetcher) BundleFromName(ref name.Reference, _ []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
 	if mb, ok := bundles[ref.Name()]; ok {
 		var b bundle.Bundle
 		err := b.UnmarshalJSON([]byte(mb.bundle))
