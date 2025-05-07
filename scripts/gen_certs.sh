@@ -5,6 +5,7 @@ set -e
 set -o pipefail
 
 NAMESPACE=${NAMESPACE:-provider-system}
+HOST=${HOST:-artifact-attestations-opa-provider.${NAMESPACE}}
 
 if [ ! -d certs ]; then
    mkdir certs
@@ -32,10 +33,10 @@ openssl genrsa -out tls.key 2048
 openssl req -new \
         -key tls.key \
         -nodes \
-        -subj "/CN=artifact-attestations-opa-provider.${NAMESPACE}" \
+        -subj "/CN=${HOST}" \
         -out server.csr
 openssl x509 -req \
-        -extfile <(printf "subjectAltName=DNS:artifact-attestations-opa-provider.%s" "${NAMESPACE}") \
+        -extfile <(printf "subjectAltName=DNS:%s" "${HOST}") \
         -days 180 \
         -in server.csr \
         -CA ca.crt \

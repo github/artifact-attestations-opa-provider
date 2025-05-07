@@ -25,6 +25,8 @@ jobs:
         run: |
           make build
       - name: Generate certificates
+        env:
+          HOST: localhost
         run: |
           ./scripts/gen_certs.sh
       - name: Run tests

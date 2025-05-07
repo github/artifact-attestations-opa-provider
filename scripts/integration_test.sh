@@ -12,6 +12,19 @@ metrics_ok() {
     curl -s http://localhost:9090/metrics | grep ^aaop_attestations_verified_ok | sed 's/aaop_attestations_verified_ok //g' | tr -d '\n'
 }
 
+validate() {
+    body=$1
+    curl -X POST \
+        -H "Content-Type: application/json" \
+        --cacert certs/ca.crt \
+        -d "${body}" \
+        https://localhost:8080
+}
+
+cleanup() {
+    kill $(jobs -p) 2>/dev/null || true
+}
+
 RES=0
 UNSIGNED_BODY=`cat <<EOF
 {
@@ -35,16 +48,14 @@ SIGNED_BODY=`cat <<EOF
 EOF
 `
 
+trap cleanup INT EXIT TERM
+
 ./aaop -certs certs&
 sleep 5
 
 # Perform a request with the unsigned image
 echo Verifying an unsigned image
-curl -X POST \
-    -H "Content-Type: application/json" \
-    --insecure \
-    -d "${UNSIGNED_BODY}" \
-    https://localhost:8080/
+validate "${UNSIGNED_BODY}"
 sleep 1
 
 COUNT=`metrics_failed`
@@ -61,11 +72,7 @@ fi
 
 # Perform a request with a signed image
 echo Verifying a signed image
-curl -X POST \
-    -H "Content-Type: application/json" \
-    --insecure \
-    -d "${SIGNED_BODY}" \
-    https://localhost:8080/
+validate "${SIGNED_BODY}"
 sleep 1
 
 COUNT=`metrics_ok`
@@ -74,5 +81,4 @@ if [ ! "${COUNT}" -gt 0 ]; then
     RES=1
 fi
 
-kill $(jobs -p)
 exit ${RES}
