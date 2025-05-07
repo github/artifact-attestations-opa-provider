@@ -83,6 +83,7 @@ if [ ! "${COUNT}" -gt 0 ]; then
     RES=1
 fi
 
+# Verify that the key in the response contains the expected image/tag
 if [ "${SIGNED_IMAGE}" != "${KEY}" ]; then
     echo "unexpected image ${KEY} in response"
 fi
