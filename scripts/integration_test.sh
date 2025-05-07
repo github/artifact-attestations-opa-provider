@@ -15,6 +15,7 @@ metrics_ok() {
 validate() {
     body=$1
     curl -X POST \
+        -s \
         -H "Content-Type: application/json" \
         --cacert certs/ca.crt \
         -d "${body}" \
@@ -37,12 +38,13 @@ UNSIGNED_BODY=`cat <<EOF
 EOF
 `
 
+SIGNED_IMAGE="ghcr.io/tinaheidinger/test-container:latest"
 SIGNED_BODY=`cat <<EOF
 {
     "apiVersion": "externaldata.gatekeeper.sh/v1beta1",
     "kind": "ProviderRequest",
     "request": {
-        "keys": ["ghcr.io/tinaheidinger/test-container:latest"]
+        "keys": ["${SIGNED_IMAGE}"]
     }
 }
 EOF
@@ -72,13 +74,17 @@ fi
 
 # Perform a request with a signed image
 echo Verifying a signed image
-validate "${SIGNED_BODY}"
+KEY=`validate "${SIGNED_BODY}" | jq -r '.response.items[0].key'`
 sleep 1
 
 COUNT=`metrics_ok`
 if [ ! "${COUNT}" -gt 0 ]; then
     echo "verification was not successful"
     RES=1
+fi
+
+if [ "${SIGNED_IMAGE}" != "${KEY}" ]; then
+    echo "unexpected image ${KEY} in response"
 fi
 
 exit ${RES}
