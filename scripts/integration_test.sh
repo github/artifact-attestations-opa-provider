@@ -62,7 +62,7 @@ sleep 1
 
 COUNT=`metrics_failed`
 if [ ! "${COUNT}" -gt 0 ]; then
-    echo "retrieve metrics not increased"
+    echo "failed retrieval metrics counter did not increase"
     RES=1
 fi
 
