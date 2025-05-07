@@ -129,7 +129,7 @@ func TestNilValidate(t *testing.T) {
 
 	request := &externaldata.ProviderRequest{
 		APIVersion: apiVersion,
-		Kind:       "ProvderRequest",
+		Kind:       "ProviderRequest",
 		Request: externaldata.Request{
 			Keys: []string{"image1", "image2"},
 		},
