@@ -155,7 +155,7 @@ func TestVerifyOk(t *testing.T) {
 
 	request := &externaldata.ProviderRequest{
 		APIVersion: apiVersion,
-		Kind:       "ProvderRequest",
+		Kind:       "ProviderRequest",
 		Request: externaldata.Request{
 			Keys: []string{validImageName},
 		},
@@ -182,7 +182,7 @@ func TestVerifyWrongDomain(t *testing.T) {
 
 	request := &externaldata.ProviderRequest{
 		APIVersion: apiVersion,
-		Kind:       "ProvderRequest",
+		Kind:       "ProviderRequest",
 		Request: externaldata.Request{
 			Keys: []string{validImageName},
 		},
@@ -209,7 +209,7 @@ func TestInvalidReference(t *testing.T) {
 
 	request := &externaldata.ProviderRequest{
 		APIVersion: apiVersion,
-		Kind:       "ProvderRequest",
+		Kind:       "ProviderRequest",
 		Request: externaldata.Request{
 			Keys: []string{"foo+bar"},
 		},
@@ -233,7 +233,7 @@ func TestInvalidBundle(t *testing.T) {
 
 	request := &externaldata.ProviderRequest{
 		APIVersion: apiVersion,
-		Kind:       "ProvderRequest",
+		Kind:       "ProviderRequest",
 		Request: externaldata.Request{
 			Keys: []string{brokenImageName},
 		},
