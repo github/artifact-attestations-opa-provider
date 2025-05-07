@@ -43,3 +43,8 @@ kind-load-image:
 .PHONY: test-rego
 test-rego:
 	cd rego && opa test . -v
+
+.PHONY: integration-test
+integration-test:
+	HOST=localhost ./scripts/gen_certs.sh
+	./scripts/integration_test.sh
