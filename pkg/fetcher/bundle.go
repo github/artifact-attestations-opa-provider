@@ -26,13 +26,14 @@ var (
 // DefaultBundleFetcher is the default implementation of the BundleFetcher.
 type DefaultBundleFetcher struct{}
 
-// BundleFromName fetches a sigstore bundle for a container from the OCI regsitry.
-func (_ *DefaultBundleFetcher) BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
+// BundleFromName fetches a sigstore bundle for a container from the OCI
+// registry.
+func (*DefaultBundleFetcher) BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
 	return BundleFromName(ref, remoteOpts)
 }
 
 // GetRemoteOptions returns the options to provide when accessing remote.
-func (_ *DefaultBundleFetcher) GetRemoteOptions(ctx context.Context, kc authn.Keychain) []remote.Option {
+func (*DefaultBundleFetcher) GetRemoteOptions(ctx context.Context, kc authn.Keychain) []remote.Option {
 	return GetRemoteOptions(ctx, kc)
 }
 

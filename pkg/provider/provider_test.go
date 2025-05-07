@@ -7,10 +7,11 @@ import (
 
 	"github.com/github/artifact-attestations-opa-provider/pkg/verifier"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
 	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
@@ -70,14 +71,14 @@ var bundles = map[string]mockBundle{
 type mockVerifier struct {
 }
 
-func (_ *mockVerifier) Verify(_ []*bundle.Bundle, _ *v1.Hash) ([]*verify.VerificationResult, error) {
+func (*mockVerifier) Verify(_ []*bundle.Bundle, _ *v1.Hash) ([]*verify.VerificationResult, error) {
 	return nil, nil
 }
 
 type mockKeyChainProvider struct {
 }
 
-func (_ *mockKeyChainProvider) KeyChain(_ context.Context) (authn.Keychain, error) {
+func (*mockKeyChainProvider) KeyChain(_ context.Context) (authn.Keychain, error) {
 	return nil, nil
 }
 
@@ -101,7 +102,7 @@ func (m *mockBundleFetcher) BundleFromName(ref name.Reference, remoteOpts []remo
 	return nil, nil, nil
 }
 
-func (_ *mockBundleFetcher) GetRemoteOptions(_ context.Context, _ authn.Keychain) []remote.Option {
+func (*mockBundleFetcher) GetRemoteOptions(_ context.Context, _ authn.Keychain) []remote.Option {
 	return nil
 }
 
@@ -146,7 +147,7 @@ func TestNilValidate(t *testing.T) {
 
 func TestVerifyOk(t *testing.T) {
 	v, err := verifier.GHVerifier("")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, v)
 	kc := &mockKeyChainProvider{}
 	bf := &mockBundleFetcher{}
@@ -173,7 +174,7 @@ func TestVerifyOk(t *testing.T) {
 
 func TestVerifyWrongDomain(t *testing.T) {
 	v, err := verifier.PGIVerifier()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, v)
 	kc := &mockKeyChainProvider{}
 	bf := &mockBundleFetcher{}
@@ -200,7 +201,7 @@ func TestVerifyWrongDomain(t *testing.T) {
 
 func TestInvalidReference(t *testing.T) {
 	v, err := verifier.GHVerifier("")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, v)
 	kc := &mockKeyChainProvider{}
 	bf := &mockBundleFetcher{}
@@ -224,7 +225,7 @@ func TestInvalidReference(t *testing.T) {
 
 func TestInvalidBundle(t *testing.T) {
 	v, err := verifier.GHVerifier("")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, v)
 	kc := &mockKeyChainProvider{}
 	bf := &mockBundleFetcher{}
