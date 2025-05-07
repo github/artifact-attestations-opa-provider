@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/google/go-containerregistry/pkg/v1"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 )
@@ -22,6 +22,19 @@ var (
 		runtime.GOOS,
 		runtime.GOARCH)
 )
+
+// DefaultBundleFetcher is the default implementation of the BundleFetcher.
+type DefaultBundleFetcher struct{}
+
+// BundleFromName fetches a sigstore bundle for a container from the OCI regsitry.
+func (b *DefaultBundleFetcher) BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
+	return BundleFromName(ref, remoteOpts)
+}
+
+// GetRemoteOptions returns the options to provide when accessing remote.
+func (b *DefaultBundleFetcher) GetRemoteOptions(ctx context.Context, kc authn.Keychain) []remote.Option {
+	return GetRemoteOptions(ctx, kc)
+}
 
 // BundleFromName fetches a sigstore bundle for a container from
 // a registry.

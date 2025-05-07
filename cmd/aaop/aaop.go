@@ -16,6 +16,7 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/verify"
 
 	"github.com/github/artifact-attestations-opa-provider/pkg/authn"
+	"github.com/github/artifact-attestations-opa-provider/pkg/fetcher"
 	"github.com/github/artifact-attestations-opa-provider/pkg/provider"
 	"github.com/github/artifact-attestations-opa-provider/pkg/verifier"
 )
@@ -83,7 +84,7 @@ func main() {
 	}()
 
 	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
-	var p = provider.New(v, kc)
+	var p = provider.New(v, kc, &fetcher.DefaultBundleFetcher{})
 	var t = transport{
 		p: p,
 	}

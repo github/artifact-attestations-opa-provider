@@ -8,12 +8,12 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/google/go-containerregistry/pkg/v1"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/verify"
 
-	"github.com/github/artifact-attestations-opa-provider/pkg/fetcher"
 	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 )
 
@@ -32,18 +32,26 @@ type KeyChainProvider interface {
 	KeyChain(ctx context.Context) (authn.Keychain, error)
 }
 
+// BundleFetcher fetches bundles from a remote OCI registry.
+type BundleFetcher interface {
+	BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.Bundle, *v1.Hash, error)
+	GetRemoteOptions(ctx context.Context, kc authn.Keychain) []remote.Option
+}
+
 // Provider is the implementation for the OPA Gatekeeper external data
 // provider.
 type Provider struct {
 	v  Verifier
 	kc KeyChainProvider
+	bf BundleFetcher
 }
 
 // New initializes a Provider with a verifier and a keychain provider.
-func New(v Verifier, k KeyChainProvider) *Provider {
+func New(v Verifier, k KeyChainProvider, bf BundleFetcher) *Provider {
 	return &Provider{
 		v:  v,
 		kc: k,
+		bf: bf,
 	}
 }
 
@@ -77,7 +85,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		log.Printf("validate: error retrieving key chain: %s", err)
 		return ErrorResponse(fmt.Sprintf("ERROR: KeyChain: %s", err))
 	}
-	var ro = fetcher.GetRemoteOptions(ctx, kc)
+	var ro = p.bf.GetRemoteOptions(ctx, kc)
 
 	// iterate over all image references (keys)
 	for _, key := range r.Request.Keys {
@@ -91,11 +99,11 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		start := time.Now()
-		bundles, hash, err := fetcher.BundleFromName(ref, ro)
+		bundles, hash, err := p.bf.BundleFromName(ref, ro)
 		dur := time.Since(start)
 		metrics.AttestationsRetrieved.Add(float64(len(bundles)))
 		metrics.AttestationsPullTimer.Observe(dur.Seconds())
-		log.Printf("validate: fetched OCI bundles in %s", dur)
+		log.Printf("validate: fetched %d OCI bundles in %s", len(bundles), dur)
 
 		if err != nil {
 			metrics.AttestationsRetrieveFail.Inc()
