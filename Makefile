@@ -48,3 +48,9 @@ test-rego:
 integration-test:
 	HOST=localhost ./scripts/gen_certs.sh
 	./scripts/integration_test.sh
+
+.PHONY: coverage 	
+coverage:
+	go test -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+	rm coverage.out
