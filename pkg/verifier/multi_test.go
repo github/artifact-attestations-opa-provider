@@ -36,6 +36,7 @@ var okBundle = `
 }`
 
 var okHash = "d57f9212097b86c8d75158ea1d974721e7c6f8c33bd77838b242c8f6a2d21813"
+var badHash = "badc0ffebadc0ffebadc0ffebadc0ffebadc0ffebadc0ffebadc0ffebadc0ffe"
 
 func TestMultiVerifier(t *testing.T) {
 	pgi, err := PGIVerifier()
@@ -65,4 +66,45 @@ func TestMultiVerifier(t *testing.T) {
 	assert.Len(t, res, 1)
 	//nolint:protogetter
 	assert.Equal(t, okHash, res[0].Statement.Subject[0].Digest["sha256"])
+}
+
+func TestMultiVerifierWrongHash(t *testing.T) {
+	pgi, err := PGIVerifier()
+	require.NoError(t, err)
+	assert.NotNil(t, pgi)
+	gh, err := GHVerifier("dotcom")
+	require.NoError(t, err)
+	assert.NotNil(t, gh)
+
+	var mv = NewMulti(map[string]*Verifier{
+		PublicGoodIssuer: pgi,
+		GitHubIssuer:     gh,
+	})
+
+	var b = &bundle.Bundle{}
+	err = b.UnmarshalJSON([]byte(okBundle))
+	require.NoError(t, err)
+	assert.NotNil(t, b)
+
+	t.Run("hash alg mismatch", func(t *testing.T) {
+		var h = &v1.Hash{
+			Algorithm: "sha384",
+			Hex:       okHash,
+		}
+
+		res, err := mv.Verify([]*bundle.Bundle{b}, h)
+		require.NoError(t, err)
+		assert.Empty(t, res)
+	})
+
+	t.Run("hash digest mismatch", func(t *testing.T) {
+		var h = &v1.Hash{
+			Algorithm: "sha256",
+			Hex:       badHash,
+		}
+
+		res, err := mv.Verify([]*bundle.Bundle{b}, h)
+		require.NoError(t, err)
+		assert.Empty(t, res)
+	})
 }
