@@ -38,6 +38,7 @@ spec:
         - -image-pull-secret={{ .Values.imagePullSecrets }}
         - -certs={{ .Values.certDir }}
         - -port={{ .Values.port }}
+        - -trust-tomain={{ .values.trustDomain }}
         ports:
         - containerPort: {{ .Values.port }}
           protocol: TCP
