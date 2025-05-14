@@ -109,11 +109,8 @@ Run this command to find the trust domain needed:
 $ TRUST_DOMAIN=`gh api meta --jq .domains.artifact_attestations.trust_domain`
 ```
 
-the provide that value during `helm install` like this:
-
-```
-    --set trustDomain=${TRUST_DOMAIN}
-```
+the provide that value during `helm install`: `--set
+trustDomain=${TRUST_DOMAIN}`
 
 ### Install via helm
 
