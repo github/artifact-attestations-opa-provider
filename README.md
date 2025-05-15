@@ -115,7 +115,7 @@ trustDomain=${TRUST_DOMAIN}`
 > [!IMPORTANT]
 > When a custom domain is used, the issuer in the rego policy must
 > updated too. The format of the issuer is
-> `https://token.actions.${SUBDOMAIN}.com`.
+> `https://token.actions.${SUBDOMAIN}.ghe.com`.
 
 ### Install via helm
 
