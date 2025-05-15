@@ -40,13 +40,15 @@ to:
 
 ### Preparation
 
-Before the installation starts, two steps are required to prepare:
+Before the installation starts, these steps are required to prepare:
 
 1. How OPA Gatekeeper authenticates the OPA External Data
    Provider. This is done via regular TLS certificates, but they must
    be created and made available to the services.
 1. If private OPI registries are used, the authentication must be
    configured.
+1. Determine if you are executing within GitHub Enterprise with a
+   `ghe.com` subdomain.
 
 #### OCI Authentication
 
@@ -95,6 +97,25 @@ certificate bundle must be provided to configure the root of trust.
 The secret containing the TLS certificate and private key can be
 automatically created, or created separately from the helm
 installation. The secret must have the name `provider-tls-cert`.
+
+#### GitHub Enterprise domain configuration
+
+If you are running with an enterprise account with a custom `ghe.com`
+subdomain, you need to configure this as a trust domain.
+
+Run this command to find the trust domain needed:
+
+```
+$ TRUST_DOMAIN=`gh api meta --jq .domains.artifact_attestations.trust_domain`
+```
+
+then provide that value during `helm install`: `--set
+trustDomain=${TRUST_DOMAIN}`
+
+> [!IMPORTANT]
+> When a custom domain is used, the issuer in the rego policy must
+> be updated too. The format of the issuer is
+> `https://token.actions.${SUBDOMAIN}.ghe.com`.
 
 ### Install via helm
 

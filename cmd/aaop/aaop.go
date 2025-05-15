@@ -38,6 +38,9 @@ const (
 	keyName  = "tls.key"
 )
 
+// DotcomTrustDomain is the default one when accessing github.com.
+const DotcomTrustDomain = "dotcom"
+
 type transport struct {
 	p *provider.Provider
 }
@@ -140,9 +143,14 @@ func loadVerifiers(pgi bool, td string) (provider.Verifier, error) {
 	}
 	var v *verifier.Verifier
 	var err error
+	var dotcom bool
 
 	// only load PGI if no tenant's trust domain is selected
-	if pgi && td == "" {
+	if td == "" || td == DotcomTrustDomain {
+		dotcom = true
+	}
+
+	if pgi && dotcom {
 		if v, err = verifier.PGIVerifier(); err != nil {
 			return nil, fmt.Errorf("failed to load PGI verifier: %w", err)
 		}
