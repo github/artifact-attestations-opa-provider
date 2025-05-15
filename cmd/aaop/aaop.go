@@ -38,7 +38,7 @@ const (
 	keyName  = "tls.key"
 )
 
-// DotcomTrustDomain is the default one when accessing github.com
+// DotcomTrustDomain is the default one when accessing github.com.
 const DotcomTrustDomain = "dotcom"
 
 type transport struct {
