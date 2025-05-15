@@ -109,12 +109,12 @@ Run this command to find the trust domain needed:
 $ TRUST_DOMAIN=`gh api meta --jq .domains.artifact_attestations.trust_domain`
 ```
 
-the provide that value during `helm install`: `--set
+then provide that value during `helm install`: `--set
 trustDomain=${TRUST_DOMAIN}`
 
 > [!IMPORTANT]
 > When a custom domain is used, the issuer in the rego policy must
-> updated too. The format of the issuer is
+> be updated too. The format of the issuer is
 > `https://token.actions.${SUBDOMAIN}.ghe.com`.
 
 ### Install via helm

@@ -1,8 +1,7 @@
 # v3.21.3
 FROM alpine@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c as builder
 
-RUN apk update
-RUN apk add go make
+RUN apk update --no-cache && apk add --no-cache go make
 
 WORKDIR /tmp/aaop
 

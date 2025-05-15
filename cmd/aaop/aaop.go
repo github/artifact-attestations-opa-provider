@@ -38,6 +38,8 @@ const (
 	keyName  = "tls.key"
 )
 
+const DotcomTrustDomain = "dotcom"
+
 type transport struct {
 	p *provider.Provider
 }
@@ -143,7 +145,7 @@ func loadVerifiers(pgi bool, td string) (provider.Verifier, error) {
 	var dotcom bool
 
 	// only load PGI if no tenant's trust domain is selected
-	if td == "" || td == "dotcom" {
+	if td == "" || td == DotcomTrustDomain {
 		dotcom = true
 	}
 
