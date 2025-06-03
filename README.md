@@ -45,7 +45,7 @@ Before the installation starts, these steps are required to prepare:
 1. How OPA Gatekeeper authenticates the OPA External Data
    Provider. This is done via regular TLS certificates, but they must
    be created and made available to the services.
-1. If private OPI registries are used, the authentication must be
+1. If private OCI registries are used, the authentication must be
    configured.
 1. Determine if you are executing within GitHub Enterprise with a
    `ghe.com` subdomain.
