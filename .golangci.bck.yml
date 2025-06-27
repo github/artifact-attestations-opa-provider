@@ -1,0 +1,67 @@
+run:
+  timeout: 5m
+
+linters:
+  disable-all: true
+  enable:
+    - gosec
+    - misspell
+    - unused
+    - typecheck
+    - staticcheck
+    - revive
+    - gofmt
+    - gocritic
+
+  presets:
+    - bugs
+    - comment
+    - unused
+    - metalinter
+
+issues:
+  include:
+    - EXC0012
+    - EXC0014
+
+linters-settings:
+  revive:
+    enable-all-rules: true
+    rules:
+      - name: add-constant
+        disabled: true
+      - name: argument-limit
+        severity: warning
+        disabled: false
+        arguments: [ 6 ]
+      - name: confusing-naming
+        disabled: true
+      - name: confusing-results
+        disabled: true
+      - name: cyclomatic
+        disabled: true
+        arguments: [ 7 ]
+      - name: file-header
+        disabled: true
+      - name: line-length-limit
+        severity: warning
+        disabled: true
+        arguments: [ 80 ]
+      - name: function-length
+        disabled: true
+      - name: cognitive-complexity
+        disabled: true
+      - name: max-public-structs
+        disabled: true
+      - name: banned-characters
+        disabled: true
+      - name: function-result-limit
+        severity: warning
+        disabled: false
+        arguments: [ 3 ]
+      - name: flag-parameter
+        disabled: true
+  wsl:
+    allow-cuddle-declarations: true
+    force-short-decl-cuddling: true
+    force-err-cuddling: true

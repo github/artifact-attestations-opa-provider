@@ -1,67 +1,107 @@
-run:
-  timeout: 5m
-
+version: "2"
 linters:
-  disable-all: true
+  default: none
   enable:
-    - gosec
-    - misspell
-    - unused
-    - typecheck
-    - staticcheck
-    - revive
-    - gofmt
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - contextcheck
+    - dupword
+    - durationcheck
+    - errcheck
+    - errchkjson
+    - errorlint
+    - exhaustive
+    - gocheckcompilerdirectives
+    - gochecksumtype
     - gocritic
-
-  presets:
-    - bugs
-    - comment
+    - godot
+    - godox
+    - gosec
+    - gosmopolitan
+    - govet
+    - ineffassign
+    - loggercheck
+    - makezero
+    - misspell
+    - musttag
+    - nilerr
+    - nilnesserr
+    - noctx
+    - protogetter
+    - reassign
+    - recvcheck
+    - revive
+    - rowserrcheck
+    - spancheck
+    - sqlclosecheck
+    - staticcheck
+    - testifylint
+    - unparam
     - unused
-    - metalinter
-
-issues:
-  include:
-    - EXC0012
-    - EXC0014
-
-linters-settings:
-  revive:
-    enable-all-rules: true
-    rules:
-      - name: add-constant
-        disabled: true
-      - name: argument-limit
-        severity: warning
-        disabled: false
-        arguments: [ 6 ]
-      - name: confusing-naming
-        disabled: true
-      - name: confusing-results
-        disabled: true
-      - name: cyclomatic
-        disabled: true
-        arguments: [ 7 ]
-      - name: file-header
-        disabled: true
-      - name: line-length-limit
-        severity: warning
-        disabled: true
-        arguments: [ 80 ]
-      - name: function-length
-        disabled: true
-      - name: cognitive-complexity
-        disabled: true
-      - name: max-public-structs
-        disabled: true
-      - name: banned-characters
-        disabled: true
-      - name: function-result-limit
-        severity: warning
-        disabled: false
-        arguments: [ 3 ]
-      - name: flag-parameter
-        disabled: true
-  wsl:
-    allow-cuddle-declarations: true
-    force-short-decl-cuddling: true
-    force-err-cuddling: true
+    - zerologlint
+  settings:
+    revive:
+      enable-all-rules: true
+      rules:
+        - name: add-constant
+          disabled: true
+        - name: argument-limit
+          arguments:
+            - 6
+          severity: warning
+          disabled: false
+        - name: confusing-naming
+          disabled: true
+        - name: confusing-results
+          disabled: true
+        - name: cyclomatic
+          arguments:
+            - 7
+          disabled: true
+        - name: file-header
+          disabled: true
+        - name: line-length-limit
+          arguments:
+            - 80
+          severity: warning
+          disabled: true
+        - name: function-length
+          disabled: true
+        - name: cognitive-complexity
+          disabled: true
+        - name: max-public-structs
+          disabled: true
+        - name: banned-characters
+          disabled: true
+        - name: function-result-limit
+          arguments:
+            - 3
+          severity: warning
+          disabled: false
+        - name: flag-parameter
+          disabled: true
+    wsl:
+      allow-cuddle-declarations: true
+      force-err-cuddling: true
+      force-short-decl-cuddling: true
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
