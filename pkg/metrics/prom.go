@@ -1,3 +1,4 @@
+// Package metrics provides Prometheus metrics integration.
 package metrics
 
 import (

@@ -1,3 +1,4 @@
+// Package fetcher provides functionality for fetching bundles.
 package fetcher
 
 import (

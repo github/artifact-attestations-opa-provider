@@ -1,3 +1,4 @@
+// Package verifier implements multi-verifier logic.
 package verifier
 
 import (
