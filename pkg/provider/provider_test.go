@@ -142,7 +142,7 @@ func TestNilValidate(t *testing.T) {
 		assert.Nil(t, i.Value)
 		assert.True(t, strings.HasSuffix(i.Error, "_unsigned"))
 	}
-	assert.Equal(t, "", response.Response.SystemError)
+	assert.Empty(t, response.Response.SystemError)
 }
 
 func TestVerifyOk(t *testing.T) {
@@ -168,7 +168,7 @@ func TestVerifyOk(t *testing.T) {
 	assert.Len(t, response.Response.Items, 1)
 	assert.Equal(t, validImageName, response.Response.Items[0].Key)
 	assert.NotNil(t, response.Response.Items[0].Value)
-	assert.Equal(t, "", response.Response.SystemError)
+	assert.Empty(t, response.Response.SystemError)
 	assert.Empty(t, response.Response.Items[0].Error)
 }
 
@@ -196,7 +196,7 @@ func TestVerifyWrongDomain(t *testing.T) {
 	assert.Nil(t, response.Response.Items[0].Value)
 	assert.Equal(t, validImageName, response.Response.Items[0].Key)
 	assert.True(t, strings.HasSuffix(response.Response.Items[0].Error, "_unsigned"))
-	assert.Equal(t, "", response.Response.SystemError)
+	assert.Empty(t, response.Response.SystemError)
 }
 
 func TestInvalid(t *testing.T) {
