@@ -1,4 +1,4 @@
-name: Build
+name: Integration tests
 
 on:
   push:
@@ -9,11 +9,13 @@ on:
 permissions: {}
 
 jobs:
-  build:
-    name: build
+  test:
+    name: Test
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: read
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -26,21 +28,11 @@ jobs:
       - name: Build
         run: |
           make build
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - name: Install Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
-        with:
-          go-version-file: go.mod
-      - name: Test
+      - name: Generate certificates
+        env:
+          HOST: localhost
         run: |
-          make test
+          ./scripts/gen_certs.sh
+      - name: Run tests
+        run: |
+          ./scripts/integration_test.sh

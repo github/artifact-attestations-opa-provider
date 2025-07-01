@@ -1,6 +1,7 @@
 certDir: /certs
 serviceAccount: opa-provider-sa
 port: 8090
+trustDomain: dotcom
 imagePullSecrets: aa-login-secret
 provider:
   timeout: 5

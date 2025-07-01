@@ -16,6 +16,7 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/verify"
 
 	"github.com/github/artifact-attestations-opa-provider/pkg/authn"
+	"github.com/github/artifact-attestations-opa-provider/pkg/fetcher"
 	"github.com/github/artifact-attestations-opa-provider/pkg/provider"
 	"github.com/github/artifact-attestations-opa-provider/pkg/verifier"
 )
@@ -36,6 +37,9 @@ const (
 	certName = "tls.crt"
 	keyName  = "tls.key"
 )
+
+// DotcomTrustDomain is the default one when accessing github.com.
+const DotcomTrustDomain = "dotcom"
 
 type transport struct {
 	p *provider.Provider
@@ -83,7 +87,7 @@ func main() {
 	}()
 
 	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
-	var p = provider.New(v, kc)
+	var p = provider.New(v, kc, &fetcher.DefaultBundleFetcher{})
 	var t = transport{
 		p: p,
 	}
@@ -139,9 +143,14 @@ func loadVerifiers(pgi bool, td string) (provider.Verifier, error) {
 	}
 	var v *verifier.Verifier
 	var err error
+	var dotcom bool
 
 	// only load PGI if no tenant's trust domain is selected
-	if pgi && td == "" {
+	if td == "" || td == DotcomTrustDomain {
+		dotcom = true
+	}
+
+	if pgi && dotcom {
 		if v, err = verifier.PGIVerifier(); err != nil {
 			return nil, fmt.Errorf("failed to load PGI verifier: %w", err)
 		}

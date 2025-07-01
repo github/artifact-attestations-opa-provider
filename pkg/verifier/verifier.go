@@ -117,12 +117,12 @@ func (v *Verifier) VerifyOne(b *bundle.Bundle, h *v1.Hash) (*verify.Verification
 		verify.WithoutIdentitiesUnsafe(),
 	}
 	var ap verify.ArtifactPolicyOption
-	var sev *verify.SignedEntityVerifier
+	var sv *verify.Verifier
 	var digest []byte
 	var pb verify.PolicyBuilder
 	var err error
 
-	if sev, err = verify.NewSignedEntityVerifier(v.tr, v.vo...); err != nil {
+	if sv, err = verify.NewVerifier(v.tr, v.vo...); err != nil {
 		return nil, err
 	}
 
@@ -133,5 +133,5 @@ func (v *Verifier) VerifyOne(b *bundle.Bundle, h *v1.Hash) (*verify.Verification
 	ap = verify.WithArtifactDigest(h.Algorithm, digest)
 	pb = verify.NewPolicy(ap, po...)
 
-	return sev.Verify(b, pb)
+	return sv.Verify(b, pb)
 }
