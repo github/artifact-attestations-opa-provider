@@ -82,6 +82,8 @@ linters:
           disabled: false
         - name: flag-parameter
           disabled: true
+        - name: package-comments
+          disabled: true
     wsl:
       allow-cuddle-declarations: true
       force-err-cuddling: true
