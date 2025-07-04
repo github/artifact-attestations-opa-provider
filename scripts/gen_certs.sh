@@ -19,8 +19,7 @@ cd certs
 #
 
 # Generate CA cert
-# openssl ecparam -name prime256v1 -genkey -noout -out ca.key
-openssl genrsa -out ca.key 2048
+openssl ecparam -name prime256v1 -genkey -noout -out ca.key
 openssl req -new -x509 \
         -subj "/O=GitHub Provider dev/CN=GitHub Provider dev Root CA" \
         -key ca.key \
@@ -28,8 +27,7 @@ openssl req -new -x509 \
         -days 365
 
 # Generate server (provider) key and cert
-# openssl ecparam -name prime256v1 -genkey -noout -out tls.key
-openssl genrsa -out tls.key 2048
+openssl ecparam -name prime256v1 -genkey -noout -out tls.key
 openssl req -new \
         -key tls.key \
         -nodes \
@@ -38,6 +36,7 @@ openssl req -new \
 openssl x509 -req \
         -extfile <(printf "subjectAltName=DNS:%s" "${HOST}") \
         -days 180 \
+        -sha256 \
         -in server.csr \
         -CA ca.crt \
         -CAkey ca.key \
