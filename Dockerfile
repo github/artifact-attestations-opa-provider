@@ -1,5 +1,5 @@
 # v3.21.3
-FROM alpine@sha256:8a1f59ffb675680d47db6337b49d22281a139e9d709335b492be023728e11715 as builder
+FROM alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1 as builder
 
 RUN apk update --no-cache && apk add --no-cache go make
 
@@ -13,7 +13,7 @@ COPY . .
 RUN --mount=type=cache,target=/gomod-cache --mount=type=cache,target=/go-cache make build
 
  # v3.21.3
-FROM alpine@sha256:8a1f59ffb675680d47db6337b49d22281a139e9d709335b492be023728e11715
+FROM alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
 
 WORKDIR /
 RUN mkdir /certs
