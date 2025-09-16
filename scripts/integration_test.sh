@@ -38,7 +38,7 @@ UNSIGNED_BODY=`cat <<EOF
 EOF
 `
 
-SIGNED_IMAGE="ghcr.io/tinaheidinger/test-container:latest"
+SIGNED_IMAGE="ghcr.io/github/artifact-attestations-opa-provider:dev"
 SIGNED_BODY=`cat <<EOF
 {
     "apiVersion": "externaldata.gatekeeper.sh/v1beta1",
