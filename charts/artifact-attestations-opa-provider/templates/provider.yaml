@@ -5,4 +5,8 @@ metadata:
 spec:
   url: https://artifact-attestations-opa-provider.{{ .Release.Namespace }}:{{ .Values.port }}
   timeout: {{ .Values.provider.timeout }}
-  caBundle: {{ required "You must provide .Values.provider.tls.caBundle" .Values.provider.tls.caBundle }}
+  {{- if .Values.provider.tls.caBundle }}
+  caBundle: {{ .Values.provider.tls.caBundle }}
+  {{- else if not .Values.provider.tls.useCertManager }}
+  {{- fail "You must set either .Values.provider.tls.caBundle or .Values.provider.tls.useCertManager" }}
+  {{- end }}
