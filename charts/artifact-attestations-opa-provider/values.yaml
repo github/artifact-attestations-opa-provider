@@ -6,4 +6,6 @@ imagePullSecrets: aa-login-secret
 provider:
   timeout: 5
   tls:
+    # Only one of useCertManager or caBundle must be set.
+    useCertManager: false
     caBundle: ""
