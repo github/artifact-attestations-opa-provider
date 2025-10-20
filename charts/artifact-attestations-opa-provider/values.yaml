@@ -8,4 +8,7 @@ provider:
   tls:
     # Only one of useCertManager or caBundle must be set.
     useCertManager: false
+    # Enable this to regularly update the Provider's `caBundle` field with the ca.crt from the mounted certificate.
+    # This is the equivalent of cert-manager's `inject-ca-from` annotation, which doesn't support Provider objects.
+    updateCABundle: false
     caBundle: ""

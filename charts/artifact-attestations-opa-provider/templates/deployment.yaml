@@ -39,6 +39,7 @@ spec:
         - -certs={{ .Values.certDir }}
         - -port={{ .Values.port }}
         - -trust-domain={{ .Values.trustDomain }}
+        - -update-ca-bundle={{ .Values.provider.tls.updateCABundle }}
         ports:
         - containerPort: {{ .Values.port }}
           protocol: TCP

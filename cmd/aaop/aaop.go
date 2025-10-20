@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -11,26 +12,27 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/sigstore/sigstore-go/pkg/verify"
-
 	"github.com/github/artifact-attestations-opa-provider/pkg/authn"
+	"github.com/github/artifact-attestations-opa-provider/pkg/cainjector"
 	"github.com/github/artifact-attestations-opa-provider/pkg/fetcher"
 	"github.com/github/artifact-attestations-opa-provider/pkg/provider"
 	"github.com/github/artifact-attestations-opa-provider/pkg/verifier"
+	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/sigstore/sigstore-go/pkg/verify"
 )
 
 var (
-	noPGI       = flag.Bool("no-public-good", false, "disable public good sigstore instance")
-	certsDir    = flag.String("certs", "", "Directory to where TLS certs are stored")
-	trustDomain = flag.String("trust-domain", "", "trust domain to use")
-	tufRepo     = flag.String("tuf-repo", "", "URL to TUF repository")
-	tufRoot     = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
-	ns          = flag.String("namespace", "", "namespace the pod runs in")
-	ips         = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registrires")
-	port        = flag.String("port", "8080", "port to listen to")
-	metricsPort = flag.String("metrics-port", "9090", "port to listen to for metrics")
+	noPGI         = flag.Bool("no-public-good", false, "disable public good sigstore instance")
+	certsDir      = flag.String("certs", "", "Directory to where TLS certs are stored")
+	trustDomain   = flag.String("trust-domain", "", "trust domain to use")
+	tufRepo       = flag.String("tuf-repo", "", "URL to TUF repository")
+	tufRoot       = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
+	ns            = flag.String("namespace", "", "namespace the pod runs in")
+	ips           = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registrires")
+	port          = flag.String("port", "8080", "port to listen to")
+	metricsPort   = flag.String("metrics-port", "9090", "port to listen to for metrics")
+	patchCABundle = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
 )
 
 const (
@@ -85,6 +87,14 @@ func main() {
 			log.Fatalf("failed to start metrics server: %v", err)
 		}
 	}()
+
+	if *patchCABundle {
+		go func() {
+			if err := cainjector.RunCABundlePatcher(context.Background(), certsDir); err != nil {
+				log.Fatalf("failed to start CA bundle patcher: %v", err)
+			}
+		}()
+	}
 
 	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
 	var p = provider.New(v, kc, &fetcher.DefaultBundleFetcher{})
