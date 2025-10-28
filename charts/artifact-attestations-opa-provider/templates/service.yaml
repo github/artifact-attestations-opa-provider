@@ -9,5 +9,5 @@ spec:
     protocol: TCP
     targetPort: {{ .Values.port }}
   selector:
-    run: artifact-attestations-opa-provider
+    app.kubernetes.io/name: artifact-attestations-opa-provider
   sessionAffinity: None

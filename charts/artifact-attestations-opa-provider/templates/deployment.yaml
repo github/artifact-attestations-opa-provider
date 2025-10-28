@@ -4,14 +4,19 @@ metadata:
   name: artifact-attestations-opa-provider
   namespace: {{ .Release.Namespace }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
-      run: artifact-attestations-opa-provider
+      app.kubernetes.io/name: artifact-attestations-opa-provider
   template:
     metadata:
       labels:
-        run: artifact-attestations-opa-provider
+        app.kubernetes.io/name: artifact-attestations-opa-provider
         {{- if .Values.azureClientId }}
         azure.workload.identity/use: "true"
         {{- end }}
@@ -42,6 +47,18 @@ spec:
         ports:
         - containerPort: {{ .Values.port }}
           protocol: TCP
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        # Prevent container from shutting down before kube-proxy has converged
+        lifecycle:
+          preStop:
+            exec:
+              command: [ "sleep", "5" ]
+        readinessProbe:
+          httpGet:
+            port: {{ .Values.port }}
+            path: "/readyz"
+            scheme: HTTPS
         volumeMounts:
         - name: provider-tls-cert
           mountPath: {{ .Values.certDir }}
