@@ -93,6 +93,9 @@ func main() {
 	}
 	var sm = http.NewServeMux()
 	sm.HandleFunc("/", t.validate)
+	sm.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 
 	var srv = &http.Server{
 		Addr:              fmt.Sprintf(":%s", *port),
