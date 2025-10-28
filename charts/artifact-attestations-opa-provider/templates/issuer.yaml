@@ -1,9 +1,0 @@
-{{- if .Values.provider.tls.useCertManager}}
-apiVersion: cert-manager.io/v1
-kind: Issuer
-metadata:
-  name: artifact-attestations-opa-provider-self-signed
-  namespace: {{ .Release.Namespace }}
-spec:
-  selfSigned: {}
-{{- end }}
