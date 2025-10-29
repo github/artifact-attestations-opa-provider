@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/open-policy-agent/frameworks/constraint/pkg/apis/externaldata/v1beta1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+// RunCABundlePatcher periodically updates the caBundle field in the Provider object with the current CA certificates.
 func RunCABundlePatcher(ctx context.Context, certsDir *string) error {
 	if err := v1beta1.AddToScheme(scheme.Scheme); err != nil {
 		return err

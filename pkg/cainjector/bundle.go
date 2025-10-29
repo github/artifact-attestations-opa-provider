@@ -14,7 +14,7 @@ import (
 	"k8s.io/utils/set"
 )
 
-// ErrNoPEMData is returned when the given data contained no PEM
+// ErrNoPEMData is returned when the given data contained no PEM.
 var ErrNoPEMData = errors.New("no PEM data was found in given input")
 
 // AppendCertificatesToBundle will append the provided certificates to the
@@ -80,7 +80,7 @@ func decodeMultipleCerts(certBytes []byte) ([]*x509.Certificate, error) {
 		// decode the tls certificate pem
 		block, certBytes, err = safeDecodeInternal(certBytes)
 		if err != nil {
-			if err == ErrNoPEMData {
+			if errors.Is(err, ErrNoPEMData) {
 				break
 			}
 
