@@ -54,10 +54,6 @@ func init() {
 }
 
 func main() {
-	// Handle signals gracefully to avoid dropping requests during Pod shutdown
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	var kc *authn.KeyChainProvider
 	var v provider.Verifier
 	var err error
@@ -102,6 +98,9 @@ func main() {
 	var sm = http.NewServeMux()
 	sm.HandleFunc("/", t.validate)
 
+	// Handle signals gracefully to avoid dropping requests during Pod shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+
 	var srv = &http.Server{
 		Addr:              fmt.Sprintf(":%s", *port),
 		ReadTimeout:       10 * time.Second,
@@ -116,17 +115,20 @@ func main() {
 	log.Printf("starting server@%s...\n", srv.Addr)
 
 	if err = run(ctx, srv, cf, kf); err != nil {
+		stop()
 		log.Fatalf("failed to start HTTP server: %v", err)
 	}
 
 	log.Println("shutting down server...")
 	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
 	if err = srv.Shutdown(ctxShutDown); err != nil {
+		cancel()
+		stop()
 		log.Fatalf("server shutdown failed: %v", err)
 	}
-
+	cancel()
+	stop()
 	log.Println("server shut down gracefully")
 }
 
@@ -134,6 +136,7 @@ func main() {
 // or ListenAndServeTLS returns an error.
 func run(ctx context.Context, srv *http.Server, cf string, kf string) error {
 	errChan := make(chan error, 1)
+	defer close(errChan)
 
 	go func() {
 		err := srv.ListenAndServeTLS(cf, kf)
@@ -148,7 +151,7 @@ func run(ctx context.Context, srv *http.Server, cf string, kf string) error {
 			return fmt.Errorf("failed to start server: %w", err)
 		}
 	case <-ctx.Done():
-		return nil
+		// Do nothing
 	}
 
 	return nil
