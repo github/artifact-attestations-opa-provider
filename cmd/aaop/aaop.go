@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/github/artifact-attestations-opa-provider/pkg/authn"
@@ -103,6 +106,12 @@ func main() {
 	}
 	var sm = http.NewServeMux()
 	sm.HandleFunc("/", t.validate)
+	sm.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Handle signals gracefully to avoid dropping requests during Pod shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
 	var srv = &http.Server{
 		Addr:              fmt.Sprintf(":%s", *port),
@@ -116,9 +125,48 @@ func main() {
 	var kf = filepath.Join(*certsDir, keyName)
 
 	log.Printf("starting server@%s...\n", srv.Addr)
-	if err = srv.ListenAndServeTLS(cf, kf); err != nil {
+
+	if err = run(ctx, srv, cf, kf); err != nil {
+		stop()
 		log.Fatalf("failed to start HTTP server: %v", err)
 	}
+
+	log.Println("shutting down server...")
+	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+	if err = srv.Shutdown(ctxShutDown); err != nil {
+		cancel()
+		stop()
+		log.Fatalf("server shutdown failed: %v", err)
+	}
+	cancel()
+	stop()
+	log.Println("server shut down gracefully")
+}
+
+// run starts the HTTP server and blocks until either the context has been cancelled
+// or ListenAndServeTLS returns an error.
+func run(ctx context.Context, srv *http.Server, cf string, kf string) error {
+	errChan := make(chan error, 1)
+	defer close(errChan)
+
+	go func() {
+		err := srv.ListenAndServeTLS(cf, kf)
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errChan <- fmt.Errorf("failed to start server: %w", err)
+		}
+	}()
+
+	select {
+	case err := <-errChan:
+		if err != nil {
+			return fmt.Errorf("failed to start server: %w", err)
+		}
+	case <-ctx.Done():
+		// Do nothing
+	}
+
+	return nil
 }
 
 // loadCustomVerifier loads a user provided TUF root.
