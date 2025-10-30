@@ -1,7 +1,11 @@
 package cainjector
 
 import (
+	"bytes"
 	"context"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -47,7 +51,7 @@ func UpdateCABundle(ctx context.Context, certsDir *string) error {
 		return fmt.Errorf("failed to read CA bundle: %w", err)
 	}
 
-	newBundle, err := appendCertificatesToBundle([]byte(provider.Spec.CABundle), caBundle)
+	newBundle, err := mergeCertBundles([]byte(provider.Spec.CABundle), caBundle)
 	if err != nil {
 		return fmt.Errorf("failed to append CA certificates to bundle: %w", err)
 	}
@@ -67,6 +71,71 @@ func UpdateCABundle(ctx context.Context, certsDir *string) error {
 	log.Println("Done")
 
 	return nil
+}
+
+func mergeCertBundles(bundle0 []byte, bundle1 []byte) ([]byte, error) {
+	certs0, err := parseCertificates(bundle0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse first certificate bundle: %w", err)
+	}
+
+	certs1, err := parseCertificates(bundle1)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse second certificate bundle: %w", err)
+	}
+
+	// Merge certificates and track unique ones by their DER encoding
+	uniqueCerts := make(map[string]bool)
+	now := time.Now()
+	buffer := bytes.NewBuffer([]byte{})
+
+	for _, cert := range append(certs0, certs1...) {
+		// Skip expired certificates
+		if cert.NotAfter.Before(now) {
+			log.Printf("Ignoring expired certificate: CN=%s, NotAfter=%s", cert.Subject.CommonName, cert.NotAfter.Format(time.RFC3339))
+			continue
+		}
+
+		// Use the DER encoding as a unique key to deduplicate
+		key := string(cert.Raw)
+		if _, exists := uniqueCerts[key]; !exists {
+			uniqueCerts[key] = true
+
+			if err = pem.Encode(buffer, &pem.Block{
+				Type:  "CERTIFICATE",
+				Bytes: cert.Raw,
+			}); err != nil {
+				return nil, fmt.Errorf("failed to encode certificate to PEM: %w", err)
+			}
+		}
+	}
+
+	if buffer.Len() == 0 {
+		return nil, errors.New("resulting CA bundle is empty after removing expired certificates")
+	}
+
+	return buffer.Bytes(), nil
+}
+
+func parseCertificates(bundle []byte) ([]*x509.Certificate, error) {
+	var certs []*x509.Certificate
+
+	for len(bundle) > 0 {
+		var block *pem.Block
+		block, bundle = pem.Decode(bundle)
+		if block == nil {
+			break
+		}
+
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse certificate: %w", err)
+		}
+
+		certs = append(certs, cert)
+	}
+
+	return certs, nil
 }
 
 func updateProvider(ctx context.Context, provider *v1beta1.Provider, bundle []byte, client *dynamic.DynamicClient) error {
