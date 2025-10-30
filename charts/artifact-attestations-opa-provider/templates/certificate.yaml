@@ -1,0 +1,16 @@
+{{- if .Values.provider.tls.useCertManager }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: artifact-attestations-opa-provider
+  namespace: {{ .Release.Namespace }}
+spec:
+  dnsNames:
+    - artifact-attestations-opa-provider
+    - artifact-attestations-opa-provider.{{ .Release.Namespace }}
+    - artifact-attestations-opa-provider.{{ .Release.Namespace }}.svc
+    - artifact-attestations-opa-provider.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    name: artifact-attestations-opa-provider-self-signed
+  secretName: provider-tls-cert
+{{- end }}
