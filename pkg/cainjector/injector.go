@@ -34,30 +34,9 @@ func RunCABundlePatcher(ctx context.Context, certsDir *string) error {
 		return fmt.Errorf("failed to create in-cluster kubernetes client: %w", err)
 	}
 
-	for {
-		log.Println("Reconciling Provider object...")
-		if err := reconcileCABundle(ctx, unstructuredClient, certsDir); err != nil {
-			log.Printf("error patching CA bundle in Provider object: %v\n", err)
-		}
-
-		time.Sleep(24 * time.Hour)
-	}
-}
-
-func reconcileCABundle(ctx context.Context, unstructuredClient *dynamic.DynamicClient, certsDir *string) error {
-	rawProvider, err := unstructuredClient.Resource(schema.GroupVersionResource{
-		Group:    "externaldata.gatekeeper.sh",
-		Version:  "v1beta1",
-		Resource: "providers",
-	}).Get(ctx, "artifact-attestations-opa-provider", v1.GetOptions{})
+	provider, err := getProvider(ctx, unstructuredClient)
 	if err != nil {
 		return fmt.Errorf("failed to get Provider object: %w", err)
-	}
-
-	var provider v1beta1.Provider
-	err = runtime.DefaultUnstructuredConverter.FromUnstructured(rawProvider.UnstructuredContent(), &provider)
-	if err != nil {
-		return fmt.Errorf("failed to convert Provider object: %w", err)
 	}
 
 	caBundle, err := os.ReadFile(path.Join(*certsDir, "ca.crt"))
@@ -75,14 +54,27 @@ func reconcileCABundle(ctx context.Context, unstructuredClient *dynamic.DynamicC
 		return nil
 	}
 
-	provider.Spec.CABundle = string(newBundle)
+	if err = updateProvider(ctx, provider, newBundle, unstructuredClient); err != nil {
+		return fmt.Errorf("failed to update Provider object: %w", err)
+	}
 
-	updatedUnstructured, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&provider)
+	log.Println("Successfully updated CA bundle in Provider object.")
+	log.Println("Sleeping for 10s to allow Gatekeeper to pick up the changes...")
+	time.Sleep(10 * time.Second)
+	log.Println("Done")
+
+	return nil
+}
+
+func updateProvider(ctx context.Context, provider *v1beta1.Provider, bundle []byte, client *dynamic.DynamicClient) error {
+	provider.Spec.CABundle = string(bundle)
+
+	updatedUnstructured, err := runtime.DefaultUnstructuredConverter.ToUnstructured(provider)
 	if err != nil {
 		return fmt.Errorf("failed to convert updated Provider object: %w", err)
 	}
 
-	_, err = unstructuredClient.Resource(schema.GroupVersionResource{
+	_, err = client.Resource(schema.GroupVersionResource{
 		Group:    "externaldata.gatekeeper.sh",
 		Version:  "v1beta1",
 		Resource: "providers",
@@ -91,7 +83,23 @@ func reconcileCABundle(ctx context.Context, unstructuredClient *dynamic.DynamicC
 		return fmt.Errorf("failed to update Provider object: %w", err)
 	}
 
-	log.Println("Successfully updated CA bundle in Provider object.")
-
 	return nil
+}
+
+func getProvider(ctx context.Context, client *dynamic.DynamicClient) (*v1beta1.Provider, error) {
+	rawProvider, err := client.Resource(schema.GroupVersionResource{
+		Group:    "externaldata.gatekeeper.sh",
+		Version:  "v1beta1",
+		Resource: "providers",
+	}).Get(ctx, "artifact-attestations-opa-provider", v1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Provider object: %w", err)
+	}
+
+	var provider v1beta1.Provider
+	if err = runtime.DefaultUnstructuredConverter.FromUnstructured(rawProvider.UnstructuredContent(), &provider); err != nil {
+		return nil, fmt.Errorf("failed to convert Provider object: %w", err)
+	}
+
+	return &provider, nil
 }
