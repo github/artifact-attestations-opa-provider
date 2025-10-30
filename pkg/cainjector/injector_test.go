@@ -40,7 +40,7 @@ func TestMergeCertBundles(t *testing.T) {
 			Name:     "Empty bundles",
 			Cert0:    nil,
 			Cert1:    nil,
-			ErrorMsg: "asdf",
+			ErrorMsg: "resulting CA bundle is empty",
 		},
 		{
 			Name:     "Append empty bundle",
