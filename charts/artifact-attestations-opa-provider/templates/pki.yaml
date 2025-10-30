@@ -18,7 +18,7 @@ spec:
     name: artifact-attestations-opa-provider-self-signed
   secretName: artifact-attestations-opa-provider-self-signed
   isCA: true
-  secretDuration: 4320h # 180 days
+  duration: 4320h # 180 days
 ---
 apiVersion: cert-manager.io/v1
 kind: Issuer

@@ -32,7 +32,7 @@ var (
 	tufRepo        = flag.String("tuf-repo", "", "URL to TUF repository")
 	tufRoot        = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
 	ns             = flag.String("namespace", "", "namespace the pod runs in")
-	ips            = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registrires")
+	ips            = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registries")
 	port           = flag.String("port", "8080", "port to listen to")
 	metricsPort    = flag.String("metrics-port", "9090", "port to listen to for metrics")
 	updateCABundle = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")

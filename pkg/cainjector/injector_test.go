@@ -84,7 +84,7 @@ func TestMergeCertBundles(t *testing.T) {
 		t.Run(test.Name, func(t *testing.T) {
 			result, err := mergeCertBundles(test.Cert0, test.Cert1)
 			if test.ErrorMsg != "" {
-				require.Error(t, err, test.ErrorMsg)
+				require.ErrorContains(t, err, test.ErrorMsg)
 			}
 
 			if test.Expected != nil {
