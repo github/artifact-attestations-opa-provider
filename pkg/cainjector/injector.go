@@ -18,8 +18,11 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// RunCABundlePatcher periodically updates the caBundle field in the Provider object with the current CA certificates.
-func RunCABundlePatcher(ctx context.Context, certsDir *string) error {
+// UpdateCABundle ensures that the `caBundle` field in the Provider object contains the CA certificates in $certsDir/ca.crt.
+// If the field is already up to date, no changes are made.
+// If an update is made, it sleeps for 10 seconds to allow Gatekeeper to pick up the changes.
+// UpdateCABundle removes expired certificates to prevent the bundle from growing indefinitely.
+func UpdateCABundle(ctx context.Context, certsDir *string) error {
 	if err := v1beta1.AddToScheme(scheme.Scheme); err != nil {
 		return err
 	}

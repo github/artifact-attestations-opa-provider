@@ -26,16 +26,16 @@ import (
 )
 
 var (
-	noPGI         = flag.Bool("no-public-good", false, "disable public good sigstore instance")
-	certsDir      = flag.String("certs", "", "Directory to where TLS certs are stored")
-	trustDomain   = flag.String("trust-domain", "", "trust domain to use")
-	tufRepo       = flag.String("tuf-repo", "", "URL to TUF repository")
-	tufRoot       = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
-	ns            = flag.String("namespace", "", "namespace the pod runs in")
-	ips           = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registrires")
-	port          = flag.String("port", "8080", "port to listen to")
-	metricsPort   = flag.String("metrics-port", "9090", "port to listen to for metrics")
-	patchCABundle = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
+	noPGI          = flag.Bool("no-public-good", false, "disable public good sigstore instance")
+	certsDir       = flag.String("certs", "", "Directory to where TLS certs are stored")
+	trustDomain    = flag.String("trust-domain", "", "trust domain to use")
+	tufRepo        = flag.String("tuf-repo", "", "URL to TUF repository")
+	tufRoot        = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
+	ns             = flag.String("namespace", "", "namespace the pod runs in")
+	ips            = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registrires")
+	port           = flag.String("port", "8080", "port to listen to")
+	metricsPort    = flag.String("metrics-port", "9090", "port to listen to for metrics")
+	updateCABundle = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
 )
 
 const (
@@ -91,12 +91,10 @@ func main() {
 		}
 	}()
 
-	if *patchCABundle {
-		go func() {
-			if err := cainjector.RunCABundlePatcher(context.Background(), certsDir); err != nil {
-				log.Fatalf("failed to start CA bundle patcher: %v", err)
-			}
-		}()
+	if *updateCABundle {
+		if err := cainjector.UpdateCABundle(context.Background(), certsDir); err != nil {
+			log.Fatalf("failed to update CA bundle: %v", err)
+		}
 	}
 
 	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
