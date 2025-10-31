@@ -106,7 +106,7 @@ if [ "${SIGNED_IMAGE}" != "${KEY}" ]; then
     RES=1
 fi
 
-# Perform a request with multiple imges
+# Perform a request with multiple images
 echo Verify with multiple images
 output=`validate "${MULTIPLE_IMG_BODY}" | jq -r '.response.items[].error'`
 # There should be one error: unsigned, one error: invalid and one error: null
