@@ -282,7 +282,7 @@ func sendResponse(w http.ResponseWriter, r *externaldata.ProviderResponse) {
 	}
 }
 
-func getK8sClient() (*dynamic.DynamicClient, interface{}) {
+func getK8sClient() (*dynamic.DynamicClient, error) {
 	if err := v1beta1.AddToScheme(scheme.Scheme); err != nil {
 		return nil, err
 	}
