@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path"
 	"time"
 
 	"github.com/open-policy-agent/frameworks/constraint/pkg/apis/externaldata/v1beta1"
@@ -19,35 +18,21 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
 )
+
+var propagationDelay = 10 * time.Second
 
 // UpdateCABundle ensures that the `caBundle` field in the Provider object contains the CA certificates in $certsDir/ca.crt.
 // If the field is already up to date, no changes are made.
 // If an update is made, it sleeps for 10 seconds to allow Gatekeeper to pick up the changes.
 // UpdateCABundle removes expired certificates to prevent the bundle from growing indefinitely.
-func UpdateCABundle(ctx context.Context, certsDir *string) error {
-	if err := v1beta1.AddToScheme(scheme.Scheme); err != nil {
-		return err
-	}
-
-	clusterConfig, err := rest.InClusterConfig()
-	if err != nil {
-		return err
-	}
-
-	unstructuredClient, err := dynamic.NewForConfig(clusterConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create in-cluster kubernetes client: %w", err)
-	}
-
-	provider, err := getProvider(ctx, unstructuredClient)
+func UpdateCABundle(ctx context.Context, bundlePath string, k8sClient dynamic.Interface) error {
+	provider, err := getProvider(ctx, k8sClient)
 	if err != nil {
 		return fmt.Errorf("failed to get Provider object: %w", err)
 	}
 
-	caBundle, err := os.ReadFile(path.Join(*certsDir, "ca.crt"))
+	caBundle, err := os.ReadFile(bundlePath)
 	if err != nil {
 		return fmt.Errorf("failed to read CA bundle: %w", err)
 	}
@@ -62,13 +47,13 @@ func UpdateCABundle(ctx context.Context, certsDir *string) error {
 		return nil
 	}
 
-	if err = updateProvider(ctx, provider, newBundle, unstructuredClient); err != nil {
+	if err = updateProvider(ctx, provider, newBundle, k8sClient); err != nil {
 		return fmt.Errorf("failed to update Provider object: %w", err)
 	}
 
 	log.Println("Successfully updated CA bundle in Provider object.")
 	log.Println("Sleeping for 10s to allow Gatekeeper to pick up the changes...")
-	time.Sleep(10 * time.Second)
+	time.Sleep(propagationDelay)
 	log.Println("Done")
 
 	return nil
@@ -146,7 +131,7 @@ func parseCertificates(bundle []byte) ([]*x509.Certificate, error) {
 	return certs, nil
 }
 
-func updateProvider(ctx context.Context, provider *v1beta1.Provider, bundle string, client *dynamic.DynamicClient) error {
+func updateProvider(ctx context.Context, provider *v1beta1.Provider, bundle string, client dynamic.Interface) error {
 	provider.Spec.CABundle = bundle
 
 	updatedUnstructured, err := runtime.DefaultUnstructuredConverter.ToUnstructured(provider)
@@ -166,7 +151,7 @@ func updateProvider(ctx context.Context, provider *v1beta1.Provider, bundle stri
 	return nil
 }
 
-func getProvider(ctx context.Context, client *dynamic.DynamicClient) (*v1beta1.Provider, error) {
+func getProvider(ctx context.Context, client dynamic.Interface) (*v1beta1.Provider, error) {
 	rawProvider, err := client.Resource(schema.GroupVersionResource{
 		Group:    "externaldata.gatekeeper.sh",
 		Version:  "v1beta1",

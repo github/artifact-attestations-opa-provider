@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"syscall"
 	"time"
@@ -20,9 +21,13 @@ import (
 	"github.com/github/artifact-attestations-opa-provider/pkg/fetcher"
 	"github.com/github/artifact-attestations-opa-provider/pkg/provider"
 	"github.com/github/artifact-attestations-opa-provider/pkg/verifier"
+	"github.com/open-policy-agent/frameworks/constraint/pkg/apis/externaldata/v1beta1"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sigstore/sigstore-go/pkg/verify"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 )
 
 var (
@@ -92,7 +97,12 @@ func main() {
 	}()
 
 	if *updateCABundle {
-		if err := cainjector.UpdateCABundle(context.Background(), certsDir); err != nil {
+		client, err := getK8sClient()
+		if err != nil {
+			log.Fatalf("failed to create Kubernetes client: %v", err)
+		}
+
+		if err := cainjector.UpdateCABundle(context.Background(), path.Join(*certsDir, "ca.crt"), client); err != nil {
 			log.Fatalf("failed to update CA bundle: %v", err)
 		}
 	}
@@ -270,4 +280,22 @@ func sendResponse(w http.ResponseWriter, r *externaldata.ProviderResponse) {
 	if err := json.NewEncoder(w).Encode(r); err != nil {
 		log.Printf("ERROR: failed to write response: %v", err)
 	}
+}
+
+func getK8sClient() (*dynamic.DynamicClient, interface{}) {
+	if err := v1beta1.AddToScheme(scheme.Scheme); err != nil {
+		return nil, err
+	}
+
+	clusterConfig, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	unstructuredClient, err := dynamic.NewForConfig(clusterConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create in-cluster kubernetes client: %w", err)
+	}
+
+	return unstructuredClient, nil
 }

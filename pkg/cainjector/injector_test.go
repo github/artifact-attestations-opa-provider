@@ -3,22 +3,29 @@ package cainjector
 import (
 	"encoding/base64"
 	"os"
+	"path"
 	"path/filepath"
 	"testing"
 
+	"github.com/open-policy-agent/frameworks/constraint/pkg/apis/externaldata/v1beta1"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/scheme"
 )
 
 func loadTestCert(t *testing.T, name string) []byte {
-	path := filepath.Join("testdata", name+".pem")
-	data, err := os.ReadFile(path)
+	certPath := filepath.Join("testdata", name+".pem")
+	data, err := os.ReadFile(certPath)
 	if err != nil {
-		t.Fatalf("failed to read test certificate %s: %v", path, err)
+		t.Fatalf("failed to read test certificate %s: %v", certPath, err)
 	}
 	return data
 }
 
-func TestMergeCertBundles(t *testing.T) {
+func TestUpdateCABundle(t *testing.T) {
 	// Load certificates from testdata
 	expired := loadTestCert(t, "expired")
 	valid1 := loadTestCert(t, "valid1")
@@ -80,17 +87,42 @@ func TestMergeCertBundles(t *testing.T) {
 			Expected:         encode(valid1),
 		},
 	}
+	err := v1beta1.AddToScheme(scheme.Scheme)
+	require.NoError(t, err)
+	propagationDelay = 0 // speed up tests
 
 	for _, test := range cases {
 		t.Run(test.Name, func(t *testing.T) {
-			result, err := mergeAndEncode(test.b64Bundle, test.additionalBundle)
+			client := fake.NewSimpleDynamicClient(scheme.Scheme, &v1beta1.Provider{
+				ObjectMeta: v1.ObjectMeta{
+					Name: "artifact-attestations-opa-provider",
+				},
+				Spec: v1beta1.ProviderSpec{
+					CABundle: test.b64Bundle,
+				},
+			})
+
+			caPath := path.Join(t.TempDir(), "ca.crt")
+			require.NoError(t, os.WriteFile(caPath, test.additionalBundle, 0600))
+
+			err = UpdateCABundle(t.Context(), caPath, client)
 			if test.ErrorMsg != "" {
 				require.ErrorContains(t, err, test.ErrorMsg)
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, test.Expected, result)
-			}
 
+				rawProvider, err := client.Resource(schema.GroupVersionResource{
+					Group:    "externaldata.gatekeeper.sh",
+					Version:  "v1beta1",
+					Resource: "providers",
+				}).Get(t.Context(), "artifact-attestations-opa-provider", v1.GetOptions{})
+				require.NoError(t, err)
+
+				var provider v1beta1.Provider
+				err = runtime.DefaultUnstructuredConverter.FromUnstructured(rawProvider.UnstructuredContent(), &provider)
+				require.NoError(t, err)
+				require.Equal(t, test.Expected, provider.Spec.CABundle)
+			}
 		})
 	}
 }
