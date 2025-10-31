@@ -140,7 +140,7 @@ func TestNilValidate(t *testing.T) {
 	assert.Equal(t, externaldata.ProviderKind("ProviderResponse"), response.Kind)
 	for _, i := range response.Response.Items {
 		assert.Nil(t, i.Value)
-		assert.True(t, strings.HasSuffix(i.Error, "_unsigned"))
+		assert.True(t, strings.HasSuffix(i.Error, "sig_invalid"))
 	}
 	assert.Empty(t, response.Response.SystemError)
 }
@@ -195,7 +195,7 @@ func TestVerifyWrongDomain(t *testing.T) {
 	assert.Len(t, response.Response.Items, 1)
 	assert.Nil(t, response.Response.Items[0].Value)
 	assert.Equal(t, validImageName, response.Response.Items[0].Key)
-	assert.True(t, strings.HasSuffix(response.Response.Items[0].Error, "_unsigned"))
+	assert.True(t, strings.HasSuffix(response.Response.Items[0].Error, "_sig_invalid"))
 	assert.Empty(t, response.Response.SystemError)
 }
 
@@ -209,15 +209,15 @@ func TestInvalid(t *testing.T) {
 
 	tests := []struct {
 		image       string
-		errorPrefix string
+		errorSuffix string
 	}{
 		{
 			image:       "foo+bar",
-			errorPrefix: "ERROR: ParseReference",
+			errorSuffix: "_invalid",
 		},
 		{
 			image:       brokenImageName,
-			errorPrefix: "ERROR: FromBundle",
+			errorSuffix: "_unsigned",
 		},
 	}
 
@@ -234,7 +234,8 @@ func TestInvalid(t *testing.T) {
 		assert.NotNil(t, response)
 		assert.Equal(t, apiVersion, response.APIVersion)
 		assert.Equal(t, externaldata.ProviderKind("ProviderResponse"), response.Kind)
-		assert.Empty(t, response.Response.Items)
-		assert.True(t, strings.HasPrefix(response.Response.SystemError, tc.errorPrefix))
+		assert.Equal(t, 1, len(response.Response.Items))
+		assert.True(t, strings.HasSuffix(response.Response.Items[0].Error,
+			tc.errorSuffix))
 	}
 }

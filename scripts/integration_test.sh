@@ -27,12 +27,13 @@ cleanup() {
 }
 
 RES=0
+UNSIGNED_IMAGE="ghcr.io/github/artifact-attestations-opa-provider:unsigned"
 UNSIGNED_BODY=`cat <<EOF
 {
     "apiVersion": "externaldata.gatekeeper.sh/v1beta1",
     "kind": "ProviderRequest",
     "request": {
-        "keys": ["ghcr.io/github/artifact-attestations-opa-provider:unsigned"]
+        "keys": ["${UNSIGNED_IMAGE}"]
     }
 }
 EOF
@@ -45,6 +46,22 @@ SIGNED_BODY=`cat <<EOF
     "kind": "ProviderRequest",
     "request": {
         "keys": ["${SIGNED_IMAGE}"]
+    }
+}
+EOF
+`
+
+BROKEN_IMAGE="foo+bar"
+MULTIPLE_IMG_BODY=`cat <<EOF
+{
+    "apiVersion": "externaldata.gatekeeper.sh/v1beta1",
+    "kind": "ProviderRequest",
+    "request": {
+        "keys": [
+            "${SIGNED_IMAGE}",
+            "${UNSIGNED_IMAGE}",
+            "${BROKEN_IMAGE}"
+        ]
     }
 }
 EOF
@@ -88,5 +105,14 @@ if [ "${SIGNED_IMAGE}" != "${KEY}" ]; then
     echo "unexpected image ${KEY} in response"
     RES=1
 fi
+
+# Perform a request with multiple imges
+echo Verify with multiple images
+output=`validate "${MULTIPLE_IMG_BODY}" | jq -r '.response.items[].error'`
+# There should be one error: unsigned, one error: invalid and one error: null
+echo "$output" | grep -q "^null$" && \
+echo "$output" | grep -q "^${UNSIGNED_IMAGE}" && \
+echo "$output" | grep -q "^${BROKEN_IMAGE}" && \
+echo "Validate multiple image successful" || RES=1
 
 exit ${RES}

@@ -95,7 +95,11 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		log.Printf("validate: verify signature for: %v", key)
 		if ref, err = name.ParseReference(key); err != nil {
 			log.Printf("validate: error parsing reference: %s", err)
-			return ErrorResponse(fmt.Sprintf("ERROR: ParseReference(%q): %v", key, err))
+			results = append(results, externaldata.Item{
+				Key:   key,
+				Error: key + "_invalid",
+			})
+			continue
 		}
 
 		start := time.Now()
@@ -108,7 +112,11 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		if err != nil {
 			metrics.AttestationsRetrieveFail.Inc()
 			log.Printf("validate: error fetching bundles: %s", err)
-			return ErrorResponse(fmt.Sprintf("ERROR: FromBundle(%q): %v", key, err))
+			results = append(results, externaldata.Item{
+				Key:   key,
+				Error: key + "_unsigned",
+			})
+			continue
 		}
 
 		start = time.Now()
@@ -139,7 +147,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 			log.Printf("validate no valid signatures found for: %s", key)
 			results = append(results, externaldata.Item{
 				Key:   key,
-				Error: key + "_unsigned",
+				Error: key + "_sig_invalid",
 			})
 		}
 	}
