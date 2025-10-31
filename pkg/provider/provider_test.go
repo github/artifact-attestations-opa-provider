@@ -234,7 +234,7 @@ func TestInvalid(t *testing.T) {
 		assert.NotNil(t, response)
 		assert.Equal(t, apiVersion, response.APIVersion)
 		assert.Equal(t, externaldata.ProviderKind("ProviderResponse"), response.Kind)
-		assert.Equal(t, 1, len(response.Response.Items))
+		assert.Len(t, response.Response.Items, 1)
 		assert.True(t, strings.HasSuffix(response.Response.Items[0].Error,
 			tc.errorSuffix))
 	}
