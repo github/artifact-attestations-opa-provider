@@ -14,18 +14,13 @@ spec:
 
         violation[{"msg": msg}] {
           images := [img | img = input.review.object.spec.containers[_].image]
-
           response := external_data({"provider": "artifact-attestations-opa-provider", "keys": images})
-
           response_with_error(response)
-
           msg := sprintf("invalid response: %v", [response])
         }
 
         response_with_error(response) {
           count(response.errors) > 0
-          errs := response.errors[_]
-          contains(errs[1], "_unsigned")
         }
 
         response_with_error(response) {
