@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -51,12 +52,12 @@ func UpdateCABundle(ctx context.Context, certsDir *string) error {
 		return fmt.Errorf("failed to read CA bundle: %w", err)
 	}
 
-	newBundle, err := mergeCertBundles([]byte(provider.Spec.CABundle), caBundle)
+	newBundle, err := mergeAndEncode(provider.Spec.CABundle, caBundle)
 	if err != nil {
 		return fmt.Errorf("failed to append CA certificates to bundle: %w", err)
 	}
 
-	if provider.Spec.CABundle == string(newBundle) {
+	if provider.Spec.CABundle == newBundle {
 		log.Println("CA bundle is already up to date, no changes made.")
 		return nil
 	}
@@ -73,15 +74,22 @@ func UpdateCABundle(ctx context.Context, certsDir *string) error {
 	return nil
 }
 
-func mergeCertBundles(bundle0 []byte, bundle1 []byte) ([]byte, error) {
-	certs0, err := parseCertificates(bundle0)
+// mergeAndEncode an additional PEM-encoded cert bundle with an base64 andPEM-encoded certificate bundle,
+// It also removes duplicates and expired certificates.
+func mergeAndEncode(encodedBundle string, additional []byte) (string, error) {
+	bundle0, err := base64.StdEncoding.DecodeString(encodedBundle)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse first certificate bundle: %w", err)
+		return "", fmt.Errorf("failed to decode existing CA bundle: %w", err)
 	}
 
-	certs1, err := parseCertificates(bundle1)
+	certs0, err := parseCertificates(bundle0)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse second certificate bundle: %w", err)
+		return "", fmt.Errorf("failed to parse first certificate bundle: %w", err)
+	}
+
+	certs1, err := parseCertificates(additional)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse second certificate bundle: %w", err)
 	}
 
 	// Merge certificates and track unique ones by their DER encoding
@@ -105,16 +113,16 @@ func mergeCertBundles(bundle0 []byte, bundle1 []byte) ([]byte, error) {
 				Type:  "CERTIFICATE",
 				Bytes: cert.Raw,
 			}); err != nil {
-				return nil, fmt.Errorf("failed to encode certificate to PEM: %w", err)
+				return "", fmt.Errorf("failed to encode certificate to PEM: %w", err)
 			}
 		}
 	}
 
 	if buffer.Len() == 0 {
-		return nil, errors.New("resulting CA bundle is empty after removing expired certificates")
+		return "", errors.New("resulting CA bundle is empty after removing expired certificates")
 	}
 
-	return buffer.Bytes(), nil
+	return base64.StdEncoding.EncodeToString(buffer.Bytes()), nil
 }
 
 func parseCertificates(bundle []byte) ([]*x509.Certificate, error) {
@@ -138,8 +146,8 @@ func parseCertificates(bundle []byte) ([]*x509.Certificate, error) {
 	return certs, nil
 }
 
-func updateProvider(ctx context.Context, provider *v1beta1.Provider, bundle []byte, client *dynamic.DynamicClient) error {
-	provider.Spec.CABundle = string(bundle)
+func updateProvider(ctx context.Context, provider *v1beta1.Provider, bundle string, client *dynamic.DynamicClient) error {
+	provider.Spec.CABundle = bundle
 
 	updatedUnstructured, err := runtime.DefaultUnstructuredConverter.ToUnstructured(provider)
 	if err != nil {
