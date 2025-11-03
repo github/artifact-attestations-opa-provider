@@ -102,7 +102,7 @@ func main() {
 			log.Fatalf("failed to create Kubernetes client: %v", err)
 		}
 
-		if err := cainjector.UpdateCABundle(context.Background(), path.Join(*certsDir, "ca.crt"), client); err != nil {
+		if err := cainjector.UpdateCABundle(context.Background(), client, path.Join(*certsDir, "ca.crt")); err != nil {
 			log.Fatalf("failed to update CA bundle: %v", err)
 		}
 	}

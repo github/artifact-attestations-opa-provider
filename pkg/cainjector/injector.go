@@ -26,7 +26,7 @@ var propagationDelay = 10 * time.Second
 // If the field is already up to date, no changes are made.
 // If an update is made, it sleeps for 10 seconds to allow Gatekeeper to pick up the changes.
 // UpdateCABundle removes expired certificates to prevent the bundle from growing indefinitely.
-func UpdateCABundle(ctx context.Context, bundlePath string, k8sClient dynamic.Interface) error {
+func UpdateCABundle(ctx context.Context, k8sClient dynamic.Interface, bundlePath string) error {
 	provider, err := getProvider(ctx, k8sClient)
 	if err != nil {
 		return fmt.Errorf("failed to get Provider object: %w", err)
@@ -47,7 +47,7 @@ func UpdateCABundle(ctx context.Context, bundlePath string, k8sClient dynamic.In
 		return nil
 	}
 
-	if err = updateProvider(ctx, provider, newBundle, k8sClient); err != nil {
+	if err = updateProvider(ctx, k8sClient, provider, newBundle); err != nil {
 		return fmt.Errorf("failed to update Provider object: %w", err)
 	}
 
@@ -131,7 +131,7 @@ func parseCertificates(bundle []byte) ([]*x509.Certificate, error) {
 	return certs, nil
 }
 
-func updateProvider(ctx context.Context, provider *v1beta1.Provider, bundle string, client dynamic.Interface) error {
+func updateProvider(ctx context.Context, client dynamic.Interface, provider *v1beta1.Provider, bundle string) error {
 	provider.Spec.CABundle = bundle
 
 	updatedUnstructured, err := runtime.DefaultUnstructuredConverter.ToUnstructured(provider)

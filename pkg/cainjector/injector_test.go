@@ -105,7 +105,7 @@ func TestUpdateCABundle(t *testing.T) {
 			caPath := path.Join(t.TempDir(), "ca.crt")
 			require.NoError(t, os.WriteFile(caPath, test.additionalBundle, 0600))
 
-			err = UpdateCABundle(t.Context(), caPath, client)
+			err = UpdateCABundle(t.Context(), client, caPath)
 			if test.ErrorMsg != "" {
 				require.ErrorContains(t, err, test.ErrorMsg)
 			} else {
