@@ -76,3 +76,7 @@ spec:
               path: tls.crt
             - key: tls.key
               path: tls.key
+{{- if .Values.provider.tls.updateCABundle }}
+            - key: ca.crt
+              path: ca.crt
+{{- end }}
