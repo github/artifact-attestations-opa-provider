@@ -155,7 +155,7 @@ echo "$output" | grep -q "^${UNSIGNED_IMAGE}" && \
 echo "$output" | grep -q "^${BROKEN_IMAGE}" && \
 echo "Validate multiple image successful" || RES=1
 
-if [ ! ${RES} -eq 0 ];
+if [ ! ${RES} -eq 0 ]; then
    echo "Integration test failed"
 fi
 
