@@ -8,7 +8,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -43,7 +43,7 @@ func UpdateCABundle(ctx context.Context, k8sClient dynamic.Interface, bundlePath
 	}
 
 	if provider.Spec.CABundle == newBundle {
-		log.Println("CA bundle is already up to date, no changes made.")
+		slog.Info("CA bundle is already up to date, no changes made.")
 		return nil
 	}
 
@@ -51,10 +51,11 @@ func UpdateCABundle(ctx context.Context, k8sClient dynamic.Interface, bundlePath
 		return fmt.Errorf("failed to update Provider object: %w", err)
 	}
 
-	log.Println("Successfully updated CA bundle in Provider object.")
-	log.Println("Sleeping for 10s to allow Gatekeeper to pick up the changes...")
+	slog.Info("Successfully updated CA bundle in Provider object.")
+	slog.Info("Sleeping to allow Gatekeeper to pick up the changes",
+		"sleep_time", propagationDelay)
 	time.Sleep(propagationDelay)
-	log.Println("Done")
+	slog.Info("Update CA bundle done")
 
 	return nil
 }
@@ -85,7 +86,9 @@ func mergeAndEncode(encodedBundle string, additional []byte) (string, error) {
 	for _, cert := range append(certs0, certs1...) {
 		// Skip expired certificates
 		if cert.NotAfter.Before(now) {
-			log.Printf("Ignoring expired certificate: CN=%s, NotAfter=%s", cert.Subject.CommonName, cert.NotAfter.Format(time.RFC3339))
+			slog.Info("Ignoring expired certificate",
+				"CN", cert.Subject.CommonName,
+				"NotAfter", cert.NotAfter.Format(time.RFC3339))
 			continue
 		}
 

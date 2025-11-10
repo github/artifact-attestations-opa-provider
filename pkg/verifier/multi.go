@@ -3,7 +3,7 @@ package verifier
 import (
 	"crypto/x509"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
@@ -46,13 +46,16 @@ func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verifica
 		var err error
 
 		if iss, err = getIssuer(b); err != nil {
-			log.Print("failed to extract issuer from bundle, ignoring")
+			slog.Error("failed to extract issuer from bundle",
+				"image_digest", h.Hex,
+				"error", err)
 			continue
 		}
 
 		if v = m.V[iss]; v == nil {
-			log.Printf("unknown issuer %s, ignoring", iss)
-
+			slog.Error("unknown issuer",
+				"image_digest", h.Hex,
+				"issuer", iss)
 			// No configured verifier for this issuer
 			continue
 		}
@@ -60,7 +63,9 @@ func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verifica
 		if r, err = v.VerifyOne(b, h); err == nil {
 			res = append(res, r)
 		} else {
-			log.Printf("ERROR verifying signature: %s", err)
+			slog.Error("verifying signature failed",
+				"image_digest", h.Hex,
+				"error", err)
 		}
 	}
 

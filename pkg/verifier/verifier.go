@@ -4,7 +4,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
@@ -103,7 +103,9 @@ func (v *Verifier) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verif
 		if r, err = v.VerifyOne(b, h); err == nil {
 			res = append(res, r)
 		} else {
-			log.Printf("ERROR verifying signature: %s", err)
+			slog.Error("failed to verify signature",
+				"image_digest", h.Hex,
+				"error", err)
 		}
 	}
 

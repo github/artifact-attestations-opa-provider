@@ -2,7 +2,6 @@ package fetcher
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"runtime"
@@ -87,9 +86,11 @@ func BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.B
 		}
 		bundles = append(bundles, b)
 	}
+
 	if len(bundles) == 0 {
-		return nil, nil, errors.New("no bundle found in referrers")
+		return nil, nil, nil
 	}
+
 	return bundles, &desc.Digest, nil
 }
 

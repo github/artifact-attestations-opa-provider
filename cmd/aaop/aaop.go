@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -57,6 +58,8 @@ type transport struct {
 
 func init() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile | log.LUTC)
+	opts := slog.HandlerOptions{Level: slog.LevelInfo}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &opts)))
 }
 
 func main() {
@@ -90,7 +93,8 @@ func main() {
 			ReadHeaderTimeout: 10 * time.Second,
 			Handler:           mm,
 		}
-		log.Printf("starting Prometheus metrics server@%s...\n", promSrv.Addr)
+		slog.Info("starting Prometheus metrics server",
+			"url", promSrv.Addr)
 		if err := promSrv.ListenAndServe(); err != nil {
 			log.Fatalf("failed to start metrics server: %v", err)
 		}
@@ -132,14 +136,15 @@ func main() {
 	var cf = filepath.Join(*certsDir, certName)
 	var kf = filepath.Join(*certsDir, keyName)
 
-	log.Printf("starting server@%s...\n", srv.Addr)
+	slog.Info("starting server",
+		"url", srv.Addr)
 
 	if err = run(ctx, srv, cf, kf); err != nil {
 		stop()
 		log.Fatalf("failed to start HTTP server: %v", err)
 	}
 
-	log.Println("shutting down server...")
+	slog.Info("shutting down server")
 	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
 	if err = srv.Shutdown(ctxShutDown); err != nil {
@@ -149,7 +154,7 @@ func main() {
 	}
 	cancel()
 	stop()
-	log.Println("server shut down gracefully")
+	slog.Info("server shut down gracefully")
 }
 
 // run starts the HTTP server and blocks until either the context has been cancelled
@@ -221,7 +226,8 @@ func loadVerifiers(pgi bool, td string) (provider.Verifier, error) {
 			return nil, fmt.Errorf("failed to load PGI verifier: %w", err)
 		}
 		mv.V[verifier.PublicGoodIssuer] = v
-		log.Println("loaded verifier for public good Sigstore")
+		slog.Info("loaded verifier",
+			"instance", "public good Sigstore")
 	}
 
 	if v, err = verifier.GHVerifier(td); err != nil {
@@ -231,7 +237,9 @@ func loadVerifiers(pgi bool, td string) (provider.Verifier, error) {
 	if td == "" {
 		td = "dotcom"
 	}
-	log.Printf("loaded verifier for GitHub Sigstore: %s", td)
+	slog.Info("loaded verifier",
+		"instance", "GitHub Sigstore",
+		"trust_domain", td)
 
 	return &mv, nil
 }
@@ -268,17 +276,19 @@ func (t *transport) validate(w http.ResponseWriter, r *http.Request) {
 }
 
 func sendResponse(w http.ResponseWriter, r *externaldata.ProviderResponse) {
-	var msg = fmt.Sprintf("writing response: items %d", len(r.Response.Items))
-	if r.Response.SystemError != "" {
-		msg = fmt.Sprintf("%s, systemerror '%s'",
-			msg,
-			r.Response.SystemError)
+	if r.Response.SystemError == "" {
+		slog.Debug("writing response",
+			"num items", len(r.Response.Items))
+	} else {
+		slog.Error("writing response",
+			"system_error", r.Response.SystemError,
+			"num items", len(r.Response.Items))
 	}
-	log.Print(msg)
 
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(r); err != nil {
-		log.Printf("ERROR: failed to write response: %v", err)
+		slog.Error("failed writing HTTP response",
+			"error", err)
 	}
 }
 

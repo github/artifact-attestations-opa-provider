@@ -3,7 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -82,7 +82,8 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 	// If the keychain configured is empty, the default keychain is used
 	// which works for public registries.
 	if kc, err = p.kc.KeyChain(ctx); err != nil {
-		log.Printf("validate: error retrieving key chain: %s", err)
+		slog.Error("validate: error retrieving key chain",
+			"error", err)
 		return ErrorResponse(fmt.Sprintf("ERROR: KeyChain: %s", err))
 	}
 	var ro = p.bf.GetRemoteOptions(ctx, kc)
@@ -92,9 +93,12 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		var res []*verify.VerificationResult
 		var ref name.Reference
 
-		log.Printf("validate: verify signature for: %v", key)
+		slog.Info("validate: verify signature",
+			"image", key)
 		if ref, err = name.ParseReference(key); err != nil {
-			log.Printf("validate: error parsing reference: %s", err)
+			slog.Error("validate: error parsing reference",
+				"image", key,
+				"error", err)
 			results = append(results, externaldata.Item{
 				Key:   key,
 				Error: key + "_invalid",
@@ -107,11 +111,26 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		dur := time.Since(start)
 		metrics.AttestationsRetrieved.Add(float64(len(bundles)))
 		metrics.AttestationsPullTimer.Observe(dur.Seconds())
-		log.Printf("validate: fetched %d OCI bundles in %s", len(bundles), dur)
+		slog.Info("validate: fetched OCI bundles",
+			"count", len(bundles),
+			"duration", dur.Seconds())
 
 		if err != nil {
 			metrics.AttestationsRetrieveFail.Inc()
-			log.Printf("validate: error fetching bundles: %s", err)
+			slog.Error("validate: error fetching bundles",
+				"image", key,
+				"error", err)
+			results = append(results, externaldata.Item{
+				Key:   key,
+				Error: key + "_unsigned",
+			})
+			continue
+		}
+
+		if len(bundles) == 0 {
+			metrics.AttestationsMissing.Inc()
+			slog.Info("validate: no bundles",
+				"image", key)
 			results = append(results, externaldata.Item{
 				Key:   key,
 				Error: key + "_unsigned",
@@ -130,21 +149,24 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		if err != nil {
-			log.Printf("validate: error calling verify: %s", err)
+			slog.Error("validate: verification error",
+				"image", key,
+				"error", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: VerifyImageSignatures(%q): %v", key, err))
 		}
 
 		var bundleVerified = len(res) > 0
 		if bundleVerified {
-			log.Printf("validate: %d valid signatures found for %s",
-				len(res),
-				key)
+			slog.Info("validate: Found valid signatures",
+				"count", len(res),
+				"image", key)
 			results = append(results, externaldata.Item{
 				Key:   key,
 				Value: res,
 			})
 		} else {
-			log.Printf("validate no valid signatures found for: %s", key)
+			slog.Info("validate: no valid signatures",
+				"image", key)
 			results = append(results, externaldata.Item{
 				Key:   key,
 				Error: key + "_sig_invalid",
