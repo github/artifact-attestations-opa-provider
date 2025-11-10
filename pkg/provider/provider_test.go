@@ -195,7 +195,7 @@ func TestVerifyWrongDomain(t *testing.T) {
 	assert.Len(t, response.Response.Items, 1)
 	assert.Nil(t, response.Response.Items[0].Value)
 	assert.Equal(t, validImageName, response.Response.Items[0].Key)
-	assert.True(t, strings.HasSuffix(response.Response.Items[0].Error, "_sig_invalid"))
+	assert.Equal(t, "invalid_signature", response.Response.Items[0].Error)
 	assert.Empty(t, response.Response.SystemError)
 }
 
@@ -208,16 +208,16 @@ func TestInvalid(t *testing.T) {
 	provider := New(v, kc, bf)
 
 	tests := []struct {
-		image       string
-		errorSuffix string
+		image string
+		error string
 	}{
 		{
-			image:       "foo+bar",
-			errorSuffix: "_invalid",
+			image: "foo+bar",
+			error: "invalid_reference",
 		},
 		{
-			image:       brokenImageName,
-			errorSuffix: "_unsigned",
+			image: brokenImageName,
+			error: "error_fetching_bundle",
 		},
 	}
 
@@ -235,7 +235,6 @@ func TestInvalid(t *testing.T) {
 		assert.Equal(t, apiVersion, response.APIVersion)
 		assert.Equal(t, externaldata.ProviderKind("ProviderResponse"), response.Kind)
 		assert.Len(t, response.Response.Items, 1)
-		assert.True(t, strings.HasSuffix(response.Response.Items[0].Error,
-			tc.errorSuffix))
+		assert.Equal(t, tc.error, response.Response.Items[0].Error)
 	}
 }

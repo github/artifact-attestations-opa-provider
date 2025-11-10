@@ -101,7 +101,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				"error", err)
 			results = append(results, externaldata.Item{
 				Key:   key,
-				Error: key + "_invalid",
+				Error: "invalid_reference",
 			})
 			continue
 		}
@@ -122,7 +122,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				"error", err)
 			results = append(results, externaldata.Item{
 				Key:   key,
-				Error: key + "_unsigned",
+				Error: "error_fetching_bundle",
 			})
 			continue
 		}
@@ -133,7 +133,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				"image", key)
 			results = append(results, externaldata.Item{
 				Key:   key,
-				Error: key + "_unsigned",
+				Error: "image_unsigned",
 			})
 			continue
 		}
@@ -169,7 +169,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				"image", key)
 			results = append(results, externaldata.Item{
 				Key:   key,
-				Error: key + "_sig_invalid",
+				Error: "invalid_signature",
 			})
 		}
 	}
