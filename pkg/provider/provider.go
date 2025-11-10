@@ -157,7 +157,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 
 		var bundleVerified = len(res) > 0
 		if bundleVerified {
-			slog.Info("validate: Found valid signatures",
+			slog.Info("validate: found valid signatures",
 				"count", len(res),
 				"image", key)
 			results = append(results, externaldata.Item{

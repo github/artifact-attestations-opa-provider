@@ -21,7 +21,7 @@ var (
 	//nolint: revive
 	AttestationsMissing = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "aaop_attestations_missing_total",
-		Help: "The total number of verifications where no attestations exists",
+		Help: "The total number of verifications where no attestations exist",
 	})
 
 	//nolint: revive
