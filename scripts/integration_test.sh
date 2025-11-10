@@ -149,10 +149,10 @@ fi
 # Perform a request with multiple images
 echo Verify with multiple images
 output=`validate "${MULTIPLE_IMG_BODY}" | jq -r '.response.items[].error'`
-# There should be one error: unsigned, one error: invalid and one error: null
+# There should be one error: unsigned, one invalid reference and one null
 echo "$output" | grep -q "^null$" && \
-echo "$output" | grep -q "^${UNSIGNED_IMAGE}" && \
-echo "$output" | grep -q "^${BROKEN_IMAGE}" && \
+echo "$output" | grep -q "image_unsigned" && \
+echo "$output" | grep -q "invalid_reference" && \
 echo "Validate multiple image successful" || RES=1
 
 if [ ! ${RES} -eq 0 ]; then
