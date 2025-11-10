@@ -140,7 +140,7 @@ func TestNilValidate(t *testing.T) {
 	assert.Equal(t, externaldata.ProviderKind("ProviderResponse"), response.Kind)
 	for _, i := range response.Response.Items {
 		assert.Nil(t, i.Value)
-		assert.True(t, strings.HasSuffix(i.Error, "sig_invalid"))
+		assert.True(t, strings.HasSuffix(i.Error, "_unsigned"))
 	}
 	assert.Empty(t, response.Response.SystemError)
 }
