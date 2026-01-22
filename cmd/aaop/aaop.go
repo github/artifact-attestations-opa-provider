@@ -95,7 +95,8 @@ func main() {
 		}
 		slog.Info("starting Prometheus metrics server",
 			"url", promSrv.Addr)
-		if err := promSrv.ListenAndServe(); err != nil {
+		if err := promSrv.ListenAndServe(); err != nil &&
+			!errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("failed to start metrics server: %v", err)
 		}
 	}()
@@ -255,10 +256,16 @@ func (t *transport) validate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Limit request body size to prevent DoS attacks (1 MB limit)
+	const maxRequestSize = 1 << 20 // 1 MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestSize)
+	defer r.Body.Close()
+
 	// read request body
 	requestBody, err := io.ReadAll(r.Body)
 	if err != nil {
-		sendResponse(w, provider.ErrorResponse(fmt.Sprintf("unable to read request body: %v", err)))
+		slog.Error("unable to read request body", "error", err)
+		sendResponse(w, provider.ErrorResponse("unable to read request body"))
 		return
 	}
 
@@ -266,7 +273,8 @@ func (t *transport) validate(w http.ResponseWriter, r *http.Request) {
 	var providerRequest externaldata.ProviderRequest
 	err = json.Unmarshal(requestBody, &providerRequest)
 	if err != nil {
-		sendResponse(w, provider.ErrorResponse(fmt.Sprintf("unable to unmarshal request body: %v", err)))
+		slog.Error("unable to unmarshal request body", "error", err)
+		sendResponse(w, provider.ErrorResponse("unable to parse request body"))
 		return
 	}
 

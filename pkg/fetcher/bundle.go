@@ -2,6 +2,7 @@ package fetcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"runtime"
@@ -38,7 +39,7 @@ func (*DefaultBundleFetcher) GetRemoteOptions(ctx context.Context, kc authn.Keyc
 
 // BundleFromName fetches a sigstore bundle for a container from
 // a registry.
-// This is copied from
+// This is based on
 // https://github.com/github/policy-controller/blob/09dab43394666d59c15ded66aee622097af58b77/pkg/webhook/bundle.go#L125
 func BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
 	desc, err := remote.Get(ref, remoteOpts...)
@@ -58,26 +59,39 @@ func BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.B
 
 	bundles := make([]*bundle.Bundle, 0)
 
+	// Read no more than 10 MB over the wire
+	const maxBundleSize = 10 << 20
+
 	for _, refDesc := range refManifest.Manifests {
+		var refImg v1.Image
+		var layers []v1.Layer
+		var layer0 io.ReadCloser
+		var err error
+
 		if !strings.HasPrefix(refDesc.ArtifactType, "application/vnd.dev.sigstore.bundle") {
 			continue
 		}
 
-		refImg, err := remote.Image(ref.Context().Digest(refDesc.Digest.String()), remoteOpts...)
+		refImg, err = remote.Image(ref.Context().Digest(refDesc.Digest.String()), remoteOpts...)
 		if err != nil {
 			return nil, nil, fmt.Errorf("error getting referrer image: %w", err)
 		}
-		layers, err := refImg.Layers()
+		layers, err = refImg.Layers()
 		if err != nil {
-			return nil, nil, fmt.Errorf("error getting referrer image: %w", err)
+			return nil, nil, fmt.Errorf("error getting referrer image layers: %w", err)
 		}
-		layer0, err := layers[0].Uncompressed()
-		if err != nil {
-			return nil, nil, fmt.Errorf("error getting referrer image: %w", err)
+		if len(layers) == 0 {
+			return nil, nil, errors.New("error getting referrer image: no layers found")
 		}
-		bundleBytes, err := io.ReadAll(layer0)
+		layer0, err = layers[0].Uncompressed()
 		if err != nil {
-			return nil, nil, fmt.Errorf("error getting referrer image: %w", err)
+			return nil, nil, fmt.Errorf("error decompressing layer: %w", err)
+		}
+		bundleBytes, err := io.ReadAll(io.LimitReader(layer0,
+			maxBundleSize))
+		layer0.Close()
+		if err != nil {
+			return nil, nil, fmt.Errorf("error reading bundle layer: %w", err)
 		}
 		b := &bundle.Bundle{}
 		err = b.UnmarshalJSON(bundleBytes)

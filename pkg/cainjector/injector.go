@@ -20,13 +20,24 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-var propagationDelay = 10 * time.Second
+// DefaultPropagationDelay is the default time to wait for Gatekeeper
+// to pick up CA bundle changes.
+const DefaultPropagationDelay = 10 * time.Second
 
-// UpdateCABundle ensures that the `caBundle` field in the Provider object contains the CA certificates in $certsDir/ca.crt.
-// If the field is already up to date, no changes are made.
-// If an update is made, it sleeps for 10 seconds to allow Gatekeeper to pick up the changes.
-// UpdateCABundle removes expired certificates to prevent the bundle from growing indefinitely.
+// UpdateCABundle ensures that the `caBundle` field in the Provider
+// object contains the CA certificates in $certsDir/ca.crt.  If the
+// field is already up to date, no changes are made.  If an update is
+// made, it sleeps for the specified propagation delay to allow
+// Gatekeeper to pick up the changes.  UpdateCABundle removes expired
+// certificates to prevent the bundle from growing indefinitely.
 func UpdateCABundle(ctx context.Context, k8sClient dynamic.Interface, bundlePath string) error {
+	return UpdateCABundleWithDelay(ctx, k8sClient, bundlePath, DefaultPropagationDelay)
+}
+
+// UpdateCABundleWithDelay is like UpdateCABundle but allows
+// specifying a custom propagation delay.  This is useful for testing
+// where a shorter or zero delay is desired.
+func UpdateCABundleWithDelay(ctx context.Context, k8sClient dynamic.Interface, bundlePath string, propagationDelay time.Duration) error {
 	provider, err := getProvider(ctx, k8sClient)
 	if err != nil {
 		return fmt.Errorf("failed to get Provider object: %w", err)
@@ -52,9 +63,11 @@ func UpdateCABundle(ctx context.Context, k8sClient dynamic.Interface, bundlePath
 	}
 
 	slog.Info("Successfully updated CA bundle in Provider object.")
-	slog.Info("Sleeping to allow Gatekeeper to pick up the changes",
-		"sleep_time", propagationDelay)
-	time.Sleep(propagationDelay)
+	if propagationDelay > 0 {
+		slog.Info("Sleeping to allow Gatekeeper to pick up the changes",
+			"sleep_time", propagationDelay)
+		time.Sleep(propagationDelay)
+	}
 	slog.Info("Update CA bundle done")
 
 	return nil
