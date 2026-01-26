@@ -41,6 +41,7 @@ var (
 	ips            = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registries")
 	port           = flag.String("port", "8080", "port to listen to")
 	metricsPort    = flag.String("metrics-port", "9090", "port to listen to for metrics")
+	maxBundle      = flag.Int("max-bundle", 0, "maximum bundle size in bytes to download")
 	updateCABundle = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
 )
 
@@ -79,6 +80,12 @@ func main() {
 		if v, err = loadVerifiers(!*noPGI, *trustDomain); err != nil {
 			log.Fatal(err)
 		}
+	}
+
+	if *maxBundle > 0 {
+		slog.Info("setting maximum bundle size",
+			"bytes", *maxBundle)
+		fetcher.MaxBundleSize = int64(*maxBundle)
 	}
 
 	// Start the metrics server

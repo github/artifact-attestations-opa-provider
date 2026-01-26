@@ -23,6 +23,10 @@ var (
 		runtime.GOARCH)
 )
 
+// MaxBundleSize is the max number of bytes read from a remote OCI registry
+// when fetching a bundle. The Default value is 10MB.
+var MaxBundleSize int64 = 10 << 20
+
 // DefaultBundleFetcher is the default implementation of the BundleFetcher.
 type DefaultBundleFetcher struct{}
 
@@ -59,9 +63,6 @@ func BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.B
 
 	bundles := make([]*bundle.Bundle, 0)
 
-	// Read no more than 10 MB over the wire
-	const maxBundleSize = 10 << 20
-
 	for _, refDesc := range refManifest.Manifests {
 		var refImg v1.Image
 		var layers []v1.Layer
@@ -88,11 +89,17 @@ func BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.B
 			return nil, nil, fmt.Errorf("error decompressing layer: %w", err)
 		}
 		bundleBytes, err := io.ReadAll(io.LimitReader(layer0,
-			maxBundleSize))
+			MaxBundleSize+1))
 		layer0.Close()
 		if err != nil {
 			return nil, nil, fmt.Errorf("error reading bundle layer: %w", err)
 		}
+
+		// check if we didn't read all the data
+		if int64(len(bundleBytes)) > MaxBundleSize {
+			return nil, nil, fmt.Errorf("bundle size exceeds maximum allowed size of %d bytes", MaxBundleSize)
+		}
+
 		b := &bundle.Bundle{}
 		err = b.UnmarshalJSON(bundleBytes)
 		if err != nil {
