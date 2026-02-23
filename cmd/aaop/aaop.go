@@ -277,9 +277,11 @@ func (t *transport) validate(w http.ResponseWriter, r *http.Request) {
 
 func sendResponse(w http.ResponseWriter, r *externaldata.ProviderResponse) {
 	if r.Response.SystemError == "" {
+		// #nosec G706
 		slog.Debug("writing response",
 			"num_items", len(r.Response.Items))
 	} else {
+		// #nosec G706
 		slog.Error("writing response",
 			"system_error", r.Response.SystemError,
 			"num_items", len(r.Response.Items))
