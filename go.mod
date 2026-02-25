@@ -3,7 +3,7 @@ module github.com/github/artifact-attestations-opa-provider
 go 1.25.6
 
 require (
-	github.com/google/go-containerregistry v0.21.0
+	github.com/google/go-containerregistry v0.21.1
 	github.com/google/go-containerregistry/pkg/authn/k8schain v0.0.0-20250225234217-098045d5e61f
 	github.com/google/go-containerregistry/pkg/authn/kubernetes v0.0.0-20250225234217-098045d5e61f
 	github.com/open-policy-agent/frameworks/constraint v0.0.0-20250310182122-79a9477fa575
