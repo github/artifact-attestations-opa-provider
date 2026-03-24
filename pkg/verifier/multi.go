@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -80,10 +81,10 @@ func getIssuer(b *bundle.Bundle) (string, error) {
 	var err error
 
 	if vc, err = b.VerificationContent(); err != nil {
-		return "", err
+		return "", fmt.Errorf("no verification content in bundle: %w", err)
 	}
 	if c = vc.Certificate(); c == nil {
-		return "", err
+		return "", errors.New("no certificate found in bundle")
 	}
 
 	if len(c.Issuer.Organization) != 1 {

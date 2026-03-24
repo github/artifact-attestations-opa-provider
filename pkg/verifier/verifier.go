@@ -81,6 +81,9 @@ func GHVerifier(td string) (*Verifier, error) {
 	if td == "" || td == "dotcom" {
 		target = defaultTR
 	} else {
+		if !validTrustDomain(td) {
+			return nil, fmt.Errorf("invalid trust domain: %q", td)
+		}
 		target = fmt.Sprintf("%s.%s", td, defaultTR)
 	}
 
@@ -89,6 +92,32 @@ func GHVerifier(td string) (*Verifier, error) {
 		target,
 		vo,
 	)
+}
+
+// validTrustDomain validates that a trust domain contains only safe
+// characters. Trust domains should be alphanumeric with hyphens, similar
+// to DNS labels.
+func validTrustDomain(td string) bool {
+	if len(td) == 0 || len(td) > 63 {
+		return false
+	}
+	for i, c := range td {
+		if c >= 'a' && c <= 'z' {
+			continue
+		}
+		if c >= 'A' && c <= 'Z' {
+			continue
+		}
+		if c >= '0' && c <= '9' {
+			continue
+		}
+		// Hyphen allowed but not at start or end
+		if c == '-' && i > 0 && i < len(td)-1 {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // Verify iterates of the provided bundles and returns a set of verification

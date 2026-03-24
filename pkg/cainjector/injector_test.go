@@ -89,7 +89,6 @@ func TestUpdateCABundle(t *testing.T) {
 	}
 	err := v1beta1.AddToScheme(scheme.Scheme)
 	require.NoError(t, err)
-	propagationDelay = 0 // speed up tests
 
 	for _, test := range cases {
 		t.Run(test.Name, func(t *testing.T) {
@@ -105,7 +104,7 @@ func TestUpdateCABundle(t *testing.T) {
 			caPath := path.Join(t.TempDir(), "ca.crt")
 			require.NoError(t, os.WriteFile(caPath, test.additionalBundle, 0600))
 
-			err = UpdateCABundle(t.Context(), client, caPath)
+			err = UpdateCABundleWithDelay(t.Context(), client, caPath, 0) // Use zero delay for tests
 			if test.ErrorMsg != "" {
 				require.ErrorContains(t, err, test.ErrorMsg)
 			} else {
