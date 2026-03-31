@@ -151,6 +151,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		if err != nil {
 			slog.Error("validate: verification error",
 				"image", key,
+				"image_digest", hash.Hex,
 				"error", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: VerifyImageSignatures(%q): %v", key, err))
 		}

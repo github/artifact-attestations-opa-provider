@@ -3,8 +3,11 @@ package verifier
 import (
 	_ "embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
@@ -103,9 +106,17 @@ func (v *Verifier) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verif
 		if r, err = v.VerifyOne(b, h); err == nil {
 			res = append(res, r)
 		} else {
-			slog.Error("failed to verify signature",
+			subjects, subjectsErr := bundleSubjects(b)
+			attrs := []any{
 				"image_digest", h.Hex,
-				"error", err)
+				"error", err,
+				"bundle_subjects", subjects,
+			}
+			if subjectsErr != nil {
+				attrs = append(attrs, "bundle_subjects_error", subjectsErr)
+			}
+
+			slog.Error("failed to verify signature", attrs...)
 		}
 	}
 
@@ -136,4 +147,69 @@ func (v *Verifier) VerifyOne(b *bundle.Bundle, h *v1.Hash) (*verify.Verification
 	pb = verify.NewPolicy(ap, po...)
 
 	return sv.Verify(b, pb)
+}
+
+func bundleSubjects(b *bundle.Bundle) (subjects []string, err error) {
+	// There are a few possibilities for nil pointer access to creep in,
+	// make sure we never panic on bad input.
+	defer func() {
+		if r := recover(); r != nil {
+			subjects = nil
+			err = fmt.Errorf("panic extracting bundle subjects: %v", r)
+		}
+	}()
+
+	if b == nil || b.Bundle == nil {
+		return nil, errors.New("nil bundle")
+	}
+
+	sc, err := b.SignatureContent()
+	if err != nil {
+		return nil, err
+	}
+
+	if sc == nil {
+		return nil, errors.New("bundle does not contain signature content")
+	}
+
+	ec := sc.EnvelopeContent()
+	if ec == nil {
+		return nil, errors.New("bundle does not contain dsse envelope")
+	}
+
+	statement, err := ec.Statement()
+	if err != nil {
+		return nil, err
+	}
+
+	if statement == nil || len(statement.GetSubject()) == 0 {
+		return []string{}, nil
+	}
+
+	subjects = make([]string, 0, len(statement.GetSubject()))
+	for _, s := range statement.GetSubject() {
+		if s == nil {
+			continue
+		}
+
+		if len(s.GetDigest()) == 0 {
+			subjects = append(subjects, fmt.Sprintf("%s: <no digest>", s.GetName()))
+			continue
+		}
+
+		algs := make([]string, 0, len(s.GetDigest()))
+		for alg := range s.GetDigest() {
+			algs = append(algs, alg)
+		}
+		slices.Sort(algs)
+
+		pairs := make([]string, 0, len(algs))
+		for _, alg := range algs {
+			pairs = append(pairs, fmt.Sprintf("%s=%s", alg, s.GetDigest()[alg]))
+		}
+
+		subjects = append(subjects, fmt.Sprintf("%s: %s", s.GetName(), strings.Join(pairs, ", ")))
+	}
+
+	return subjects, nil
 }
