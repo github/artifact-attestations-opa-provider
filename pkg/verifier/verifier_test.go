@@ -3,6 +3,7 @@ package verifier
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/in-toto/attestation/go/v1"
@@ -248,5 +249,49 @@ func TestBundleSubjects(t *testing.T) {
 		subjects, err := bundleSubjects(b)
 		require.Error(t, err)
 		assert.Nil(t, subjects)
+	})
+
+	t.Run("truncates when more than five subjects", func(t *testing.T) {
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal([]byte(okBundle), &raw))
+
+		dsse, ok := raw["dsseEnvelope"].(map[string]any)
+		require.True(t, ok)
+
+		payloadB64, ok := dsse["payload"].(string)
+		require.True(t, ok)
+
+		payload, err := base64.StdEncoding.DecodeString(payloadB64)
+		require.NoError(t, err)
+
+		var statement v1.Statement
+		require.NoError(t, json.Unmarshal(payload, &statement))
+
+		// Add subjects to bring total to 7 (1 original + 6 new).
+		for i := range 6 {
+			statement.Subject = append(statement.Subject,
+				&v1.ResourceDescriptor{
+					Name:   fmt.Sprintf("example.com/img%d", i),
+					Digest: map[string]string{"sha256": fmt.Sprintf("%064d", i)},
+				},
+			)
+		}
+
+		// nolint:govet
+		updatedPayload, err := json.Marshal(statement)
+		require.NoError(t, err)
+		dsse["payload"] = base64.StdEncoding.EncodeToString(updatedPayload)
+
+		bundleJSON, err := json.Marshal(raw)
+		require.NoError(t, err)
+
+		b := &bundle.Bundle{}
+		require.NoError(t, b.UnmarshalJSON(bundleJSON))
+
+		subjects, err := bundleSubjects(b)
+		require.NoError(t, err)
+		// 5 subjects + 1 truncation message
+		require.Len(t, subjects, 6)
+		assert.Contains(t, subjects[5], "and 2 more subjects")
 	})
 }

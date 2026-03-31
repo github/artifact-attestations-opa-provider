@@ -26,6 +26,11 @@ const (
 	tufRootPGI = "https://tuf-repo-cdn.sigstore.dev"
 	tufRootGH  = "https://tuf-repo.github.com"
 	defaultTR  = "trusted_root.json"
+
+	// maxBundleSubjects caps the number of subjects included when
+	// logging bundle contents. Bundles are attacker-controlled, so
+	// we bound this to prevent log amplification.
+	maxBundleSubjects = 5
 )
 
 //go:embed embed/tuf-repo.github.com/root.json
@@ -209,6 +214,12 @@ func bundleSubjects(b *bundle.Bundle) (subjects []string, err error) {
 		}
 
 		subjects = append(subjects, fmt.Sprintf("%s: %s", s.GetName(), strings.Join(pairs, ", ")))
+	}
+
+	if len(subjects) > maxBundleSubjects {
+		truncated := subjects[:maxBundleSubjects]
+		truncated = append(truncated, fmt.Sprintf("... and %d more subjects", len(subjects)-maxBundleSubjects))
+		return truncated, nil
 	}
 
 	return subjects, nil
