@@ -63,9 +63,19 @@ func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verifica
 		if r, err = v.VerifyOne(b, h); err == nil {
 			res = append(res, r)
 		} else {
-			slog.Error("verifying signature failed",
+			subjects, subjectsErr := bundleSubjects(b)
+			attrs := []any{
 				"image_digest", h.Hex,
-				"error", err)
+				"error", err,
+				"bundle_subjects", subjects,
+			}
+			if subjectsErr != nil {
+				attrs = append(attrs, "bundle_subjects_error", subjectsErr)
+			}
+
+
+			slog.Error("multi: verifying signature failed",
+				attrs...)
 		}
 	}
 
