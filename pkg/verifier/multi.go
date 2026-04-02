@@ -73,7 +73,6 @@ func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verifica
 				attrs = append(attrs, "bundle_subjects_error", subjectsErr)
 			}
 
-
 			slog.Error("multi: verifying signature failed",
 				attrs...)
 		}
