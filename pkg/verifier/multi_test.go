@@ -46,10 +46,7 @@ func TestMultiVerifier(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, gh)
 
-	var mv = NewMulti(map[string]*Verifier{
-		PublicGoodIssuer: pgi,
-		GitHubIssuer:     gh,
-	})
+	var mv = NewMulti([]*Verifier{pgi, gh})
 
 	var b = &bundle.Bundle{}
 	err = b.UnmarshalJSON([]byte(okBundle))
@@ -76,10 +73,7 @@ func TestMultiVerifierWrongHash(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, gh)
 
-	var mv = NewMulti(map[string]*Verifier{
-		PublicGoodIssuer: pgi,
-		GitHubIssuer:     gh,
-	})
+	var mv = NewMulti([]*Verifier{pgi, gh})
 
 	var b = &bundle.Bundle{}
 	err = b.UnmarshalJSON([]byte(okBundle))

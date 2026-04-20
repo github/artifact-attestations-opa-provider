@@ -1,8 +1,6 @@
 package verifier
 
 import (
-	"crypto/x509"
-	"fmt"
 	"log/slog"
 
 	"github.com/google/go-containerregistry/pkg/v1"
@@ -22,14 +20,17 @@ const (
 // Multi is a Verifier that knows about multiple trust roots and inspects
 // the bundle to select the correct trust root for each provided bundle.
 type Multi struct {
-	V map[string]*Verifier
+	V []*Verifier
 }
 
 // NewMulti initializes the multi verifier with a map of Issuer org to
 // a Verifier.
-func NewMulti(v map[string]*Verifier) *Multi {
+func NewMulti(v []*Verifier) *Multi {
+	var m = make([]*Verifier, len(v))
+
+	copy(m, v)
 	return &Multi{
-		V: v,
+		V: m,
 	}
 }
 
@@ -38,31 +39,20 @@ func NewMulti(v map[string]*Verifier) *Multi {
 // issuers are ignored.
 func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.VerificationResult, error) {
 	var res = []*verify.VerificationResult{}
+	var err error
 
 	for _, b := range bundles {
 		var r *verify.VerificationResult
-		var v *Verifier
-		var iss string
-		var err error
 
-		if iss, err = getIssuer(b); err != nil {
-			slog.Error("failed to extract issuer from bundle",
-				"image_digest", h.Hex,
-				"error", err)
-			continue
+		for _, v := range m.V {
+			if r, err = v.VerifyOne(b, h); err == nil {
+				res = append(res, r)
+				// skip rest of verifiers if verified
+				break
+			}
 		}
 
-		if v = m.V[iss]; v == nil {
-			slog.Error("unknown issuer",
-				"image_digest", h.Hex,
-				"issuer", iss)
-			// No configured verifier for this issuer
-			continue
-		}
-
-		if r, err = v.VerifyOne(b, h); err == nil {
-			res = append(res, r)
-		} else {
+		if r == nil {
 			subjects, subjectsErr := bundleSubjects(b)
 			attrs := []any{
 				"image_digest", h.Hex,
@@ -79,25 +69,4 @@ func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verifica
 	}
 
 	return res, nil
-}
-
-// getIssuer extracts the certificate from the bundle and returns the
-// organization name that issued the certificate.
-func getIssuer(b *bundle.Bundle) (string, error) {
-	var vc verify.VerificationContent
-	var c *x509.Certificate
-	var err error
-
-	if vc, err = b.VerificationContent(); err != nil {
-		return "", err
-	}
-	if c = vc.Certificate(); c == nil {
-		return "", err
-	}
-
-	if len(c.Issuer.Organization) != 1 {
-		return "", fmt.Errorf("expected 1 issuer, found %d", len(c.Issuer.Organization))
-	}
-
-	return c.Issuer.Organization[0], nil
 }
