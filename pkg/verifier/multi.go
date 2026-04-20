@@ -36,7 +36,7 @@ func NewMulti(v []*Verifier) *Multi {
 }
 
 // Verify iterates over each bundle, and verifies the bundle against
-// all known trust roots. If a sucessful verification occurs, no other
+// all known trust roots. If a successful verification occurs, no other
 // trust roots are tried.
 func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.VerificationResult, error) {
 	var res = []*verify.VerificationResult{}
