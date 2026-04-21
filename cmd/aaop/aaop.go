@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,7 +35,7 @@ import (
 var (
 	noPGI          = flag.Bool("no-public-good", false, "disable public good sigstore instance")
 	certsDir       = flag.String("certs", "", "Directory to where TLS certs are stored")
-	trustDomain    = flag.String("trust-domain", "", "trust domain to use")
+	trustDomains   = flag.String("trust-domain", "", "comma separated trust domains to use")
 	tufRepo        = flag.String("tuf-repo", "", "URL to TUF repository")
 	tufRoot        = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
 	ns             = flag.String("namespace", "", "namespace the pod runs in")
@@ -66,17 +67,29 @@ func main() {
 	var kc *authn.KeyChainProvider
 	var v provider.Verifier
 	var err error
+	var tds []string
+	var tmp []string
 
 	flag.Parse()
+
+	tmp = strings.Split(*trustDomains, ",")
+
+	for _, t := range tmp {
+		candidate := strings.TrimSpace(t)
+		if candidate == "" {
+			continue
+		}
+		tds = append(tds, candidate)
+	}
 
 	if *tufRepo != "" && *tufRoot != "" {
 		if v, err = loadCustomVerifier(*tufRepo,
 			*tufRoot,
-			*trustDomain); err != nil {
+			tds); err != nil {
 			log.Fatal(err)
 		}
 	} else {
-		if v, err = loadVerifiers(!*noPGI, *trustDomain); err != nil {
+		if v, err = loadVerifiers(!*noPGI, tds); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -183,11 +196,13 @@ func run(ctx context.Context, srv *http.Server, cf string, kf string) error {
 }
 
 // loadCustomVerifier loads a user provided TUF root.
-// Currently only verificatoin options with RFC3161 signed timestamps
+// Currently only verification options with RFC3161 signed timestamps
 // are supported.
-func loadCustomVerifier(repo, root, td string) (provider.Verifier, error) {
+func loadCustomVerifier(repo, root string, tds []string) (provider.Verifier, error) {
+	var mv = verifier.Multi{
+		V: []*verifier.Verifier{},
+	}
 	var rb []byte
-	var v *verifier.Verifier
 	var vo = []verify.VerifierOption{
 		verify.WithSignedTimestamps(1),
 	}
@@ -197,49 +212,63 @@ func loadCustomVerifier(repo, root, td string) (provider.Verifier, error) {
 		return nil, fmt.Errorf("failed to load verifier: %w", err)
 	}
 
-	if v, err = verifier.New(rb, repo, td, vo); err != nil {
-		return nil, fmt.Errorf("failed to create verifier: %w", err)
+	for _, td := range tds {
+		var v *verifier.Verifier
+
+		if v, err = verifier.New(rb, repo, td, vo); err != nil {
+			return nil, fmt.Errorf("failed to create verifier: %w", err)
+		}
+
+		mv.V = append(mv.V, v)
+
+		slog.Info("loaded verifier",
+			"tuf_repo", repo,
+			"trust_domain", td)
 	}
 
-	return v, nil
+	if len(mv.V) == 0 {
+		return nil, errors.New("no trust root provided")
+	}
+
+	return &mv, nil
 }
 
 // loadVerifiers returns the default verifiers. If pgi is true and tr is
 // the empty string, pgi and gh verifiers are returned.
-// if the provided trust domain is set, only gh verifier is returend,
+// if the provided trust domain is set, only gh verifier is returned,
 // with the set trust domain.
-func loadVerifiers(pgi bool, td string) (provider.Verifier, error) {
+func loadVerifiers(pgi bool, tds []string) (provider.Verifier, error) {
 	var mv = verifier.Multi{
-		V: map[string]*verifier.Verifier{},
+		V: []*verifier.Verifier{},
 	}
 	var v *verifier.Verifier
 	var err error
-	var dotcom bool
 
-	// only load PGI if no tenant's trust domain is selected
-	if td == "" || td == DotcomTrustDomain {
-		dotcom = true
+	if len(tds) == 0 {
+		tds = append(tds, DotcomTrustDomain)
 	}
 
-	if pgi && dotcom {
+	if pgi {
 		if v, err = verifier.PGIVerifier(); err != nil {
 			return nil, fmt.Errorf("failed to load PGI verifier: %w", err)
 		}
-		mv.V[verifier.PublicGoodIssuer] = v
+		mv.V = append(mv.V, v)
 		slog.Info("loaded verifier",
 			"instance", "public good Sigstore")
 	}
 
-	if v, err = verifier.GHVerifier(td); err != nil {
-		return nil, fmt.Errorf("failed to load GitHub verifier: %w", err)
+	for _, td := range tds {
+		var v *verifier.Verifier
+
+		if v, err = verifier.GHVerifier(td); err != nil {
+			return nil, fmt.Errorf("failed to load GitHub verifier: %w", err)
+		}
+		mv.V = append(mv.V, v)
+
+		slog.Info("loaded verifier",
+			"instance", "GitHub Sigstore",
+			"trust_domain", td)
 	}
-	mv.V[verifier.GitHubIssuer] = v
-	if td == "" {
-		td = "dotcom"
-	}
-	slog.Info("loaded verifier",
-		"instance", "GitHub Sigstore",
-		"trust_domain", td)
 
 	return &mv, nil
 }

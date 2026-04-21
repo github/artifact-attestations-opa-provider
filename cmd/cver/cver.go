@@ -20,9 +20,7 @@ var (
 )
 
 func main() {
-	var mv = &verifier.Multi{
-		V: map[string]*verifier.Verifier{},
-	}
+	var mv = &verifier.Multi{}
 	var v *verifier.Verifier
 	var res []*verify.VerificationResult
 	var ref name.Reference
@@ -41,12 +39,12 @@ func main() {
 		log.Print(err)
 	}
 
-	mv.V[verifier.PublicGoodIssuer] = v
+	mv.V = append(mv.V, v)
 
 	if v, err = verifier.GHVerifier(""); err != nil {
 		log.Print(err)
 	}
-	mv.V[verifier.GitHubIssuer] = v
+	mv.V = append(mv.V, v)
 
 	if ref, err = name.ParseReference(*img); err != nil {
 		log.Print(err)

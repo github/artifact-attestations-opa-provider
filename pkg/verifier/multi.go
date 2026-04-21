@@ -1,8 +1,6 @@
 package verifier
 
 import (
-	"crypto/x509"
-	"fmt"
 	"log/slog"
 
 	"github.com/google/go-containerregistry/pkg/v1"
@@ -19,50 +17,42 @@ const (
 	GitHubIssuer = "GitHub, Inc."
 )
 
-// Multi is a Verifier that knows about multiple trust roots and inspects
-// the bundle to select the correct trust root for each provided bundle.
+// Multi is a Verifier that knows about multiple trust roots.
+// During verification each trust root are tried until a successful
+// verification is reached.
 type Multi struct {
-	V map[string]*Verifier
+	V []*Verifier
 }
 
-// NewMulti initializes the multi verifier with a map of Issuer org to
-// a Verifier.
-func NewMulti(v map[string]*Verifier) *Multi {
+// NewMulti initializes a verifier with an ordered list of verifiers.
+func NewMulti(v []*Verifier) *Multi {
+	var m = make([]*Verifier, len(v))
+
+	copy(m, v)
 	return &Multi{
-		V: v,
+		V: m,
 	}
 }
 
-// Verify iterates over each bundle and selects the correct verifier
-// based on the certificate's issuer. Bundles with unknown certificate
-// issuers are ignored.
+// Verify iterates over each bundle, and verifies the bundle against
+// all known trust roots. If a successful verification occurs, no other
+// trust roots are tried.
 func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.VerificationResult, error) {
 	var res = []*verify.VerificationResult{}
+	var err error
 
 	for _, b := range bundles {
 		var r *verify.VerificationResult
-		var v *Verifier
-		var iss string
-		var err error
 
-		if iss, err = getIssuer(b); err != nil {
-			slog.Error("failed to extract issuer from bundle",
-				"image_digest", h.Hex,
-				"error", err)
-			continue
+		for _, v := range m.V {
+			if r, err = v.VerifyOne(b, h); err == nil {
+				res = append(res, r)
+				// skip rest of verifiers if verified
+				break
+			}
 		}
 
-		if v = m.V[iss]; v == nil {
-			slog.Error("unknown issuer",
-				"image_digest", h.Hex,
-				"issuer", iss)
-			// No configured verifier for this issuer
-			continue
-		}
-
-		if r, err = v.VerifyOne(b, h); err == nil {
-			res = append(res, r)
-		} else {
+		if r == nil {
 			subjects, subjectsErr := bundleSubjects(b)
 			attrs := []any{
 				"image_digest", h.Hex,
@@ -79,25 +69,4 @@ func (m *Multi) Verify(bundles []*bundle.Bundle, h *v1.Hash) ([]*verify.Verifica
 	}
 
 	return res, nil
-}
-
-// getIssuer extracts the certificate from the bundle and returns the
-// organization name that issued the certificate.
-func getIssuer(b *bundle.Bundle) (string, error) {
-	var vc verify.VerificationContent
-	var c *x509.Certificate
-	var err error
-
-	if vc, err = b.VerificationContent(); err != nil {
-		return "", err
-	}
-	if c = vc.Certificate(); c == nil {
-		return "", err
-	}
-
-	if len(c.Issuer.Organization) != 1 {
-		return "", fmt.Errorf("expected 1 issuer, found %d", len(c.Issuer.Organization))
-	}
-
-	return c.Issuer.Organization[0], nil
 }
