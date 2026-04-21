@@ -24,8 +24,8 @@ type Multi struct {
 	V []*Verifier
 }
 
-// NewMulti initializes the multi verifier with a map of Issuer org to
-// a Verifier.
+
+// NewMulti initializes a verifier with an ordered list of verifiers.
 func NewMulti(v []*Verifier) *Multi {
 	var m = make([]*Verifier, len(v))
 

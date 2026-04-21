@@ -68,10 +68,19 @@ func main() {
 	var v provider.Verifier
 	var err error
 	var tds []string
+	var tmp []string
 
 	flag.Parse()
 
-	tds = strings.Split(*trustDomains, ",")
+	tmp = strings.Split(*trustDomains, ",")
+
+	for _, t := range tmp {
+		candidate := strings.TrimSpace(t)
+		if candidate == "" {
+			continue
+		}
+		tds = append(tds, candidate)
+	}
 
 	if *tufRepo != "" && *tufRoot != "" {
 		if v, err = loadCustomVerifier(*tufRepo,
@@ -187,7 +196,7 @@ func run(ctx context.Context, srv *http.Server, cf string, kf string) error {
 }
 
 // loadCustomVerifier loads a user provided TUF root.
-// Currently only verificatoin options with RFC3161 signed timestamps
+// Currently only verification options with RFC3161 signed timestamps
 // are supported.
 func loadCustomVerifier(repo, root string, tds []string) (provider.Verifier, error) {
 	var mv = verifier.Multi{
@@ -226,7 +235,7 @@ func loadCustomVerifier(repo, root string, tds []string) (provider.Verifier, err
 
 // loadVerifiers returns the default verifiers. If pgi is true and tr is
 // the empty string, pgi and gh verifiers are returned.
-// if the provided trust domain is set, only gh verifier is returend,
+// if the provided trust domain is set, only gh verifier is returned,
 // with the set trust domain.
 func loadVerifiers(pgi bool, tds []string) (provider.Verifier, error) {
 	var mv = verifier.Multi{
