@@ -51,8 +51,8 @@ func TestLoadVerifiers_InvalidDomain(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to load GitHub verifier")
 }
 
-func TestLoadCustomVerifier_EmptyTrustDomains(t *testing.T) {
-	// Even with valid repo/root args, empty tds should return an error
+func TestLoadCustomVerifier_EmptyTargets(t *testing.T) {
+	// Even with valid repo/root args, empty targets should return an error
 	tmpDir := t.TempDir()
 	rootFile := filepath.Join(tmpDir, "root.json")
 	require.NoError(t, os.WriteFile(rootFile, []byte(`{}`), 0o600))
@@ -60,7 +60,7 @@ func TestLoadCustomVerifier_EmptyTrustDomains(t *testing.T) {
 	verifiers, err := LoadCustomVerifier("https://example.com", rootFile, nil)
 	require.Error(t, err)
 	assert.Nil(t, verifiers)
-	assert.Contains(t, err.Error(), "no trust root provided")
+	assert.Contains(t, err.Error(), "no trust root found")
 }
 
 func TestLoadCustomVerifier_BadRootPath(t *testing.T) {

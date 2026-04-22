@@ -53,7 +53,7 @@ func CreateVerifier(cfg *VerifierCfg) (*verifier.Multi, error) {
 // LoadCustomVerifier loads a user provided TUF root.
 // Currently only verification options with RFC3161 signed timestamps
 // are supported.
-func LoadCustomVerifier(repo, root string, tds []string) ([]*verifier.Verifier, error) {
+func LoadCustomVerifier(repo, root string, targets []string) ([]*verifier.Verifier, error) {
 	var rb []byte
 	var verifiers = []*verifier.Verifier{}
 	var vo = []verify.VerifierOption{
@@ -65,10 +65,10 @@ func LoadCustomVerifier(repo, root string, tds []string) ([]*verifier.Verifier, 
 		return nil, fmt.Errorf("failed to load verifier: %w", err)
 	}
 
-	for _, td := range tds {
+	for _, target := range targets {
 		var v *verifier.Verifier
 
-		if v, err = verifier.New(rb, repo, td, vo); err != nil {
+		if v, err = verifier.New(rb, repo, target, vo); err != nil {
 			return nil, fmt.Errorf("failed to create verifier: %w", err)
 		}
 
@@ -76,20 +76,19 @@ func LoadCustomVerifier(repo, root string, tds []string) ([]*verifier.Verifier, 
 
 		slog.Info("loaded verifier",
 			"tuf_repo", repo,
-			"trust_domain", td)
+			"target", target)
 	}
 
 	if len(verifiers) == 0 {
-		return nil, errors.New("no trust root provided")
+		return nil, errors.New("no trust root found/provided")
 	}
 
 	return verifiers, nil
 }
 
-// LoadVerifiers returns the default verifiers. If pgi is true and tr is
-// the empty string, pgi and gh verifiers are returned.
-// if the provided trust domain is set, only gh verifier is returned,
-// with the set trust domain.
+// LoadVerifiers returns the default verifiers (Sigstore public good can be
+// omitted). If trust domains are not empty they are laoded as GitHub
+// verifiers too.
 func LoadVerifiers(pgi bool, tds []string) ([]*verifier.Verifier, error) {
 	var verifiers = []*verifier.Verifier{}
 	var v *verifier.Verifier

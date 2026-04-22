@@ -25,7 +25,7 @@ var (
 	bundleFile   = flag.String("bundle", "", "path to a sigstore bundle JSON file on disk")
 	tufRepo      = flag.String("tuf-repo", "", "URL to custom TUF repository")
 	tufRoot      = flag.String("tuf-root", "", "path to root.json for custom TUF repository")
-	tufTargets   = flag.String("tuf-targets", "", "comma separated list of trust domains for custom TUF repo")
+	tufTargets   = flag.String("tuf-targets", "", "comma separated list of targets (trust domains) for custom TUF repo")
 )
 
 func main() {
