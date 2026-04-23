@@ -18,15 +18,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/github/artifact-attestations-opa-provider/internal/app"
 	"github.com/github/artifact-attestations-opa-provider/pkg/authn"
 	"github.com/github/artifact-attestations-opa-provider/pkg/cainjector"
 	"github.com/github/artifact-attestations-opa-provider/pkg/fetcher"
 	"github.com/github/artifact-attestations-opa-provider/pkg/provider"
-	"github.com/github/artifact-attestations-opa-provider/pkg/verifier"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/apis/externaldata/v1beta1"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/sigstore/sigstore-go/pkg/verify"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -38,6 +37,7 @@ var (
 	trustDomains   = flag.String("trust-domain", "", "comma separated trust domains to use")
 	tufRepo        = flag.String("tuf-repo", "", "URL to TUF repository")
 	tufRoot        = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
+	tufTargets     = flag.String("tuf-targets", "", "Comma separated list of targets to load as trust roots")
 	ns             = flag.String("namespace", "", "namespace the pod runs in")
 	ips            = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registries")
 	port           = flag.String("port", "8080", "port to listen to")
@@ -49,9 +49,6 @@ const (
 	certName = "tls.crt"
 	keyName  = "tls.key"
 )
-
-// DotcomTrustDomain is the default one when accessing github.com.
-const DotcomTrustDomain = "dotcom"
 
 type transport struct {
 	p *provider.Provider
@@ -67,31 +64,45 @@ func main() {
 	var kc *authn.KeyChainProvider
 	var v provider.Verifier
 	var err error
-	var tds []string
-	var tmp []string
 
 	flag.Parse()
 
-	tmp = strings.Split(*trustDomains, ",")
-
-	for _, t := range tmp {
-		candidate := strings.TrimSpace(t)
-		if candidate == "" {
-			continue
-		}
-		tds = append(tds, candidate)
+	var vCfg = app.VerifierCfg{
+		TufRoot: *tufRoot,
+		TufRepo: *tufRepo,
+		UsePGI:  !*noPGI,
 	}
 
-	if *tufRepo != "" && *tufRoot != "" {
-		if v, err = loadCustomVerifier(*tufRepo,
-			*tufRoot,
-			tds); err != nil {
-			log.Fatal(err)
+	if *tufTargets != "" {
+		var targets = []string{}
+		tmp := strings.Split(*tufTargets, ",")
+
+		for _, t := range tmp {
+			candidate := strings.TrimSpace(t)
+			if candidate == "" {
+				continue
+			}
+			targets = append(targets, candidate)
 		}
-	} else {
-		if v, err = loadVerifiers(!*noPGI, tds); err != nil {
-			log.Fatal(err)
+		vCfg.TufTargets = targets
+	}
+
+	if *trustDomains != "" {
+		var tds []string
+		tmp := strings.Split(*trustDomains, ",")
+
+		for _, t := range tmp {
+			candidate := strings.TrimSpace(t)
+			if candidate == "" {
+				continue
+			}
+			tds = append(tds, candidate)
 		}
+		vCfg.TrustDomains = tds
+	}
+
+	if v, err = app.CreateVerifier(&vCfg); err != nil {
+		log.Fatal(err)
 	}
 
 	// Start the metrics server
@@ -193,84 +204,6 @@ func run(ctx context.Context, srv *http.Server, cf string, kf string) error {
 	}
 
 	return nil
-}
-
-// loadCustomVerifier loads a user provided TUF root.
-// Currently only verification options with RFC3161 signed timestamps
-// are supported.
-func loadCustomVerifier(repo, root string, tds []string) (provider.Verifier, error) {
-	var mv = verifier.Multi{
-		V: []*verifier.Verifier{},
-	}
-	var rb []byte
-	var vo = []verify.VerifierOption{
-		verify.WithSignedTimestamps(1),
-	}
-	var err error
-
-	if rb, err = os.ReadFile(root); err != nil {
-		return nil, fmt.Errorf("failed to load verifier: %w", err)
-	}
-
-	for _, td := range tds {
-		var v *verifier.Verifier
-
-		if v, err = verifier.New(rb, repo, td, vo); err != nil {
-			return nil, fmt.Errorf("failed to create verifier: %w", err)
-		}
-
-		mv.V = append(mv.V, v)
-
-		slog.Info("loaded verifier",
-			"tuf_repo", repo,
-			"trust_domain", td)
-	}
-
-	if len(mv.V) == 0 {
-		return nil, errors.New("no trust root provided")
-	}
-
-	return &mv, nil
-}
-
-// loadVerifiers returns the default verifiers. If pgi is true and tr is
-// the empty string, pgi and gh verifiers are returned.
-// if the provided trust domain is set, only gh verifier is returned,
-// with the set trust domain.
-func loadVerifiers(pgi bool, tds []string) (provider.Verifier, error) {
-	var mv = verifier.Multi{
-		V: []*verifier.Verifier{},
-	}
-	var v *verifier.Verifier
-	var err error
-
-	if len(tds) == 0 {
-		tds = append(tds, DotcomTrustDomain)
-	}
-
-	if pgi {
-		if v, err = verifier.PGIVerifier(); err != nil {
-			return nil, fmt.Errorf("failed to load PGI verifier: %w", err)
-		}
-		mv.V = append(mv.V, v)
-		slog.Info("loaded verifier",
-			"instance", "public good Sigstore")
-	}
-
-	for _, td := range tds {
-		var v *verifier.Verifier
-
-		if v, err = verifier.GHVerifier(td); err != nil {
-			return nil, fmt.Errorf("failed to load GitHub verifier: %w", err)
-		}
-		mv.V = append(mv.V, v)
-
-		slog.Info("loaded verifier",
-			"instance", "GitHub Sigstore",
-			"trust_domain", td)
-	}
-
-	return &mv, nil
 }
 
 // validate intercepts an external data request from OPA Gatekeeper to
