@@ -9,7 +9,7 @@ require (
 	github.com/in-toto/attestation v1.2.0
 	github.com/open-policy-agent/frameworks/constraint v0.0.0-20250310182122-79a9477fa575
 	github.com/prometheus/client_golang v1.23.2
-	github.com/sigstore/sigstore-go v1.2.0
+	github.com/sigstore/sigstore-go v1.2.1
 	github.com/stretchr/testify v1.11.1
 	k8s.io/apimachinery v0.36.1
 	k8s.io/client-go v0.36.1
