@@ -71,12 +71,12 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ secrets.ACR_MODA_REGISTRY }}/github/artifact-attestations-opa-provider:${{ steps.version.outputs.tag }}
+          tags: ${{ secrets.ACR_MODA_REGISTRY }}/artifact-attestations-opa-provider:${{ steps.version.outputs.tag }}
           platforms: linux/amd64,linux/arm64
 
       - name: Attest build provenance for ACR
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-name: ${{ secrets.ACR_MODA_REGISTRY }}/github/artifact-attestations-opa-provider
+          subject-name: ${{ secrets.ACR_MODA_REGISTRY }}/artifact-attestations-opa-provider
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
