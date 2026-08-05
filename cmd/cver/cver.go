@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -129,7 +130,8 @@ func main() {
 		if ref, err = name.ParseReference(*img); err != nil {
 			log.Print(err)
 		}
-		if b, h, err = fetcher.BundleFromName(ref, remoteOpts); err != nil {
+		ctx := context.Background()
+		if b, h, err = fetcher.BundleFromName(ctx, ref, remoteOpts); err != nil {
 			log.Print(err)
 		}
 	}
