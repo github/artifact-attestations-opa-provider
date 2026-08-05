@@ -34,8 +34,8 @@ type KeyChainProvider interface {
 
 // BundleFetcher fetches bundles from a remote OCI registry.
 type BundleFetcher interface {
-	BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.Bundle, *v1.Hash, error)
-	GetRemoteOptions(ctx context.Context, kc authn.Keychain) []remote.Option
+	BundleFromName(ctx context.Context, ref name.Reference, remoteOpts []remote.Option) ([]*bundle.Bundle, *v1.Hash, error)
+	GetRemoteOptions(kc authn.Keychain) []remote.Option
 }
 
 // Provider is the implementation for the OPA Gatekeeper external data
@@ -86,7 +86,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 			"error", err)
 		return ErrorResponse(fmt.Sprintf("ERROR: KeyChain: %s", err))
 	}
-	var ro = p.bf.GetRemoteOptions(ctx, kc)
+	var ro = p.bf.GetRemoteOptions(kc)
 
 	// iterate over all image references (keys)
 	for _, key := range r.Request.Keys {
@@ -107,7 +107,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		start := time.Now()
-		bundles, hash, err := p.bf.BundleFromName(ref, ro)
+		bundles, hash, err := p.bf.BundleFromName(ctx, ref, ro)
 		dur := time.Since(start)
 		metrics.AttestationsRetrieved.Add(float64(len(bundles)))
 		metrics.AttestationsPullTimer.Observe(dur.Seconds())
