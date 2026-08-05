@@ -3,10 +3,13 @@ package fetcher
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -87,4 +90,56 @@ func TestRetryBundleReturnsLastError(t *testing.T) {
 
 	require.ErrorIs(t, err, lastErr)
 	assert.NotErrorIs(t, err, firstErr)
+}
+
+func TestIsAuthenticationError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "unauthorized status",
+			err:  &transport.Error{StatusCode: http.StatusUnauthorized},
+			want: true,
+		},
+		{
+			name: "forbidden status",
+			err:  &transport.Error{StatusCode: http.StatusForbidden},
+			want: true,
+		},
+		{
+			name: "unauthorized diagnostic",
+			err: &transport.Error{Errors: []transport.Diagnostic{
+				{Code: transport.UnauthorizedErrorCode},
+			}},
+			want: true,
+		},
+		{
+			name: "denied diagnostic",
+			err: &transport.Error{Errors: []transport.Diagnostic{
+				{Code: transport.DeniedErrorCode},
+			}},
+			want: true,
+		},
+		{
+			name: "wrapped authentication error",
+			err:  fmt.Errorf("remote get: %w", &transport.Error{StatusCode: http.StatusUnauthorized}),
+			want: true,
+		},
+		{
+			name: "server error",
+			err:  &transport.Error{StatusCode: http.StatusInternalServerError},
+		},
+		{
+			name: "ordinary error",
+			err:  errors.New("connection reset"),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, isAuthenticationError(test.err))
+		})
+	}
 }

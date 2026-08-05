@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"runtime"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 )
 
@@ -117,6 +119,9 @@ func DoBundleFromName(ctx context.Context, ref name.Reference, ro []remote.Optio
 
 	desc, err := remote.Get(ref, opts...)
 	if err != nil {
+		if isAuthenticationError(err) {
+			return nil, nil, &NonRecoverableError{Op: "getting image descriptor", Err: err}
+		}
 		return nil, nil, fmt.Errorf("error getting image descriptor: %w", err)
 	}
 
@@ -171,6 +176,25 @@ func DoBundleFromName(ctx context.Context, ref name.Reference, ro []remote.Optio
 	}
 
 	return bundles, &desc.Digest, nil
+}
+
+func isAuthenticationError(err error) bool {
+	var transportErr *transport.Error
+	if !errors.As(err, &transportErr) {
+		return false
+	}
+
+	if transportErr.StatusCode == http.StatusUnauthorized || transportErr.StatusCode == http.StatusForbidden {
+		return true
+	}
+
+	for _, diagnostic := range transportErr.Errors {
+		if diagnostic.Code == transport.UnauthorizedErrorCode || diagnostic.Code == transport.DeniedErrorCode {
+			return true
+		}
+	}
+
+	return false
 }
 
 // GetRemoteOptions returns the options to provide when accessing remote
