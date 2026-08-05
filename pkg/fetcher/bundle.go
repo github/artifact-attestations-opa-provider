@@ -22,14 +22,16 @@ var (
 		"dev",
 		runtime.GOOS,
 		runtime.GOARCH)
-	// The number of attempts when fetching a bundle.
+	// MaxAttempts is the number of attempts when fetching a bundle.
 	MaxAttempts = 3
-	// The timeout for a single attempt to fetch a bundle.
+	// Timeout for a single attempt to fetch a bundle.
 	Timeout = time.Second * 3
-	// The delay between attempts to fetch bundles.
+	// Delay between attempts to fetch bundles.
 	Delay = time.Duration(0)
 )
 
+// NonRecoverableError represent a bundle fetching error that can't
+// be recovered from.
 type NonRecoverableError struct {
 	Op  string
 	Err error
