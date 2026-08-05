@@ -1,4 +1,10 @@
 version: 2
+registries:
+  ghcr:
+    type: docker-registry
+    url: ghcr.io
+    username: PAT
+    password: ${{ secrets.BASE_CONTAINER_IMAGE_READER_DEPENDABOT }}
 updates:
   - package-ecosystem: "gomod"
     directory: "/"
@@ -27,11 +33,6 @@ updates:
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
-      interval: "weekly"
-    cooldown:
-      default-days: 3
-    groups:
-      minor-patch:
-        update-types:
-          - "minor"
-          - "patch"
+      interval: daily
+    registries: [ghcr]
+    labels: [dependencies, docker]

@@ -1,4 +1,3 @@
-# v3.21.3
-FROM alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+FROM ghcr.io/github/gh-base-image/gh-base-noble:20260731-094650-g61ba3829f@sha256:965152ebc8311c75bc9db9fc1c178a8c04718ca5d5521c30f55ba40ef229ff4d
 
 RUN echo "arbitrary string to avoid collision with signed image" > /dummyfile.txt
