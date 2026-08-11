@@ -217,7 +217,7 @@ func TestInvalid(t *testing.T) {
 		},
 		{
 			image: brokenImageName,
-			error: "error_fetching_bundle",
+			error: "error_fetching_bundle_unknown",
 		},
 	}
 

@@ -143,3 +143,68 @@ func TestIsAuthenticationError(t *testing.T) {
 		})
 	}
 }
+
+func TestClassify(t *testing.T) {
+	fe := &FetchError{Step: StepReferrers, Kind: KindReferrersUnavailable, Attempts: 3}
+	reason, step, attempts := Classify(fe)
+	assert.Equal(t, "referrers_unavailable", reason)
+	assert.Equal(t, "referrers", step)
+	assert.Equal(t, 3, attempts)
+
+	reason, step, attempts = Classify(errors.New("some other error"))
+	assert.Equal(t, "unknown", reason)
+	assert.Empty(t, step)
+	assert.Equal(t, 0, attempts)
+
+	reason, _, _ = Classify(fmt.Errorf("wrapped: %w", &FetchError{Kind: KindTimeout}))
+	assert.Equal(t, "timeout", reason)
+}
+
+func TestFetchErrorErrorAndUnwrap(t *testing.T) {
+	inner := errors.New("boom")
+	fe := &FetchError{Step: StepBlob, Kind: KindBlobError, Attempts: 2, StatusCode: 500, Err: inner}
+
+	assert.Contains(t, fe.Error(), "step=blob")
+	assert.Contains(t, fe.Error(), "reason=blob_error")
+	assert.ErrorIs(t, fe, inner)
+}
+
+func TestNewFetchErrorClassifiesAuthAsNonRecoverable(t *testing.T) {
+	fe := newFetchError(StepDescriptor, KindDescriptorError, &transport.Error{StatusCode: http.StatusForbidden})
+	assert.Equal(t, KindForbidden, fe.Kind)
+	assert.False(t, fe.Recoverable)
+	assert.Equal(t, http.StatusForbidden, fe.StatusCode)
+
+	fe = newFetchError(StepBlob, KindBlobError, errors.New("connection reset"))
+	assert.Equal(t, KindBlobError, fe.Kind)
+	assert.True(t, fe.Recoverable)
+}
+
+func TestRetryBundleTimeoutSetsAttemptsAndReason(t *testing.T) {
+	const maxAttempts = 3
+
+	_, _, err := retryBundle(t.Context(), maxAttempts, 5*time.Millisecond, 0, func(ctx context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		<-ctx.Done()
+		return nil, nil, newFetchError(StepDescriptor, KindDescriptorError, ctx.Err())
+	})
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindTimeout, fe.Kind)
+	assert.Equal(t, maxAttempts, fe.Attempts)
+}
+
+func TestRetryBundleStopsOnNonRecoverableFetchError(t *testing.T) {
+	var attempts int
+
+	_, _, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		attempts++
+		return nil, nil, &FetchError{Step: StepDescriptor, Kind: KindUnauthorized, Recoverable: false, Err: errors.New("401")}
+	})
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindUnauthorized, fe.Kind)
+	assert.Equal(t, 1, attempts)
+	assert.Equal(t, 1, fe.Attempts)
+}

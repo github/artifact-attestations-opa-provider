@@ -242,11 +242,14 @@ The metrics exposed beyond the default Prometheus metrics are:
 
 * `aaop_attestations_retrieved_total`: the total number of
   attestations downloaded from the OCI registry.
-* `aaop_attestations_retrieved_failed`: the total number of
-  failed attestations downloaded from the OCI registry.
+* `aaop_attestations_retrieved_fail`: the total number of
+  failed bundle fetches from the OCI registry. Labeled by `reason`
+  (e.g. `timeout`, `throttled`, `unauthorized`, `forbidden`,
+  `referrers_unavailable`, `descriptor_error`, `blob_error`,
+  `bundle_invalid`, `unknown`).
 * `aaop_attestations_verified_ok`: the total number of verified
   attestations.
-* `aaop_attestations_verified_failed`: the total number of
+* `aaop_attestations_verified_fail`: the total number of
   attestations that failed to verify.
 * `aaop_attestations_request_timer`: the duration in seconds for
   the validation webhook.

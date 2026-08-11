@@ -14,6 +14,7 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/verify"
 
+	"github.com/github/artifact-attestations-opa-provider/pkg/fetcher"
 	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 )
 
@@ -109,23 +110,34 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		start := time.Now()
 		bundles, hash, err := p.bf.BundleFromName(ctx, ref, ro)
 		dur := time.Since(start)
-		metrics.AttestationsRetrieved.Add(float64(len(bundles)))
+		// Record the fetch latency for both successful and failed fetches.
+		// The tail of this histogram (failed fetches timing out) is a key
+		// signal when troubleshooting registry latency, so it must include
+		// failures.
 		metrics.AttestationsPullTimer.Observe(dur.Seconds())
-		slog.Info("validate: fetched OCI bundles",
-			"count", len(bundles),
-			"duration", dur.Seconds())
 
 		if err != nil {
-			metrics.AttestationsRetrieveFail.Inc()
+			reason, step, attempts := fetcher.Classify(err)
+			metrics.AttestationsRetrieveFail.WithLabelValues(reason).Inc()
 			slog.Error("validate: error fetching bundles",
 				"image", key,
+				"reason", reason,
+				"step", step,
+				"attempts", attempts,
+				"duration_s", dur.Seconds(),
 				"error", err)
 			results = append(results, externaldata.Item{
 				Key:   key,
-				Error: "error_fetching_bundle",
+				Error: "error_fetching_bundle_" + reason,
 			})
 			continue
 		}
+
+		metrics.AttestationsRetrieved.Add(float64(len(bundles)))
+		slog.Info("validate: fetched OCI bundles",
+			"image", key,
+			"count", len(bundles),
+			"duration_s", dur.Seconds())
 
 		if len(bundles) == 0 {
 			metrics.AttestationsMissing.Inc()
