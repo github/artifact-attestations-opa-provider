@@ -200,17 +200,17 @@ func DoBundleFromName(ctx context.Context, ref name.Reference, ro []remote.Optio
 
 	desc, err := remote.Get(ref, opts...)
 	if err != nil {
-		return nil, nil, newFetchError(StepDescriptor, KindDescriptorError, err)
+		return nil, nil, newDescriptorError(err)
 	}
 
 	digest := ref.Context().Digest(desc.Digest.String())
 	referrers, err := remote.Referrers(digest, opts...)
 	if err != nil {
-		return nil, nil, newFetchError(StepReferrers, KindReferrersUnavailable, err)
+		return nil, nil, newReferrersError(err)
 	}
 	refManifest, err := referrers.IndexManifest()
 	if err != nil {
-		return nil, nil, newFetchError(StepReferrers, KindReferrersUnavailable, err)
+		return nil, nil, newReferrersError(err)
 	}
 
 	bundles := make([]*bundle.Bundle, 0)
@@ -222,20 +222,20 @@ func DoBundleFromName(ctx context.Context, ref name.Reference, ro []remote.Optio
 
 		refImg, err := remote.Image(ref.Context().Digest(refDesc.Digest.String()), opts...)
 		if err != nil {
-			return nil, nil, newFetchError(StepBlob, KindBlobError, err)
+			return nil, nil, newBlobError(err)
 		}
 		layers, err := refImg.Layers()
 		if err != nil {
-			return nil, nil, newFetchError(StepBlob, KindBlobError, err)
+			return nil, nil, newBlobError(err)
 		}
 		layer0, err := layers[0].Uncompressed()
 		if err != nil {
-			return nil, nil, newFetchError(StepBlob, KindBlobError, err)
+			return nil, nil, newBlobError(err)
 		}
 		bundleBytes, err := io.ReadAll(layer0)
 		layer0.Close()
 		if err != nil {
-			return nil, nil, newFetchError(StepBlob, KindBlobError, err)
+			return nil, nil, newBlobError(err)
 		}
 		b := &bundle.Bundle{}
 		err = b.UnmarshalJSON(bundleBytes)
@@ -297,6 +297,21 @@ func newFetchError(step Step, fallback FailureKind, err error) *FetchError {
 	}
 }
 
+// newDescriptorError builds a FetchError for a failed image manifest GET.
+func newDescriptorError(err error) *FetchError {
+	return newFetchError(StepDescriptor, KindDescriptorError, err)
+}
+
+// newReferrersError builds a FetchError for a failed OCI Referrers API call.
+func newReferrersError(err error) *FetchError {
+	return newFetchError(StepReferrers, KindReferrersUnavailable, err)
+}
+
+// newBlobError builds a FetchError for a failed referrer image / blob fetch.
+func newBlobError(err error) *FetchError {
+	return newFetchError(StepBlob, KindBlobError, err)
+}
+
 // classifyTransport maps an error to a stable FailureKind and, when the error
 // is an OCI transport error, the HTTP status code.
 func classifyTransport(err error) (FailureKind, int) {
@@ -350,9 +365,11 @@ func kindFromContext(err error) FailureKind {
 // exhausted into a FetchError carrying the total number of attempts.
 func finalizeFetchError(err error, attempts int) error {
 	if err == nil {
+		// Defensive: this is only reached when the retry loop ran zero
+		// iterations (maxAttempts < 1), so no attempt was ever made.
 		return &FetchError{
-			Kind:     KindTimeout,
-			Attempts: attempts,
+			Kind:     KindUnknown,
+			Attempts: 0,
 			Err:      errors.New("no bundle fetch attempts were made"),
 		}
 	}
