@@ -45,6 +45,7 @@ var (
 	bundleMaxAttempts = flag.Int("bundle-max-attempts", 3, "max attempts to fetch a bundle")
 	bundleTimeout     = flag.Duration("bundle-timeout", 3*time.Second, "timeout for a single attempt to fetch a bundle")
 	bundleDelay       = flag.Duration("bundle-delay", 0, "delay between attempts to fetch a bundle")
+	bundleCacheTTL    = flag.Duration("bundle-cache-ttl", 60*time.Second, "TTL for the in-memory bundle cache; 0 disables caching")
 	updateCABundle    = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
 )
 
@@ -142,7 +143,15 @@ func main() {
 	}
 
 	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
-	var p = provider.New(v, kc, &fetcher.DefaultBundleFetcher{})
+
+	var bf provider.BundleFetcher = &fetcher.DefaultBundleFetcher{}
+	if *bundleCacheTTL > 0 {
+		// The janitor goroutine lives for the process lifetime; there is no
+		// defer Stop() here because main exits via log.Fatal on error.
+		bf = fetcher.NewCachingBundleFetcher(&fetcher.DefaultBundleFetcher{}, *bundleCacheTTL)
+		slog.Info("bundle cache enabled", "ttl", bundleCacheTTL.String())
+	}
+	var p = provider.New(v, kc, bf)
 	var t = transport{
 		p: p,
 	}

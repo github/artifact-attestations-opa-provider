@@ -263,6 +263,25 @@ The metrics exposed beyond the default Prometheus metrics are:
    time it takes to download the attestations from the OCI registry.
 * `aaop_attestations_verification_timer`: the duration in seconds for
   the time it takes to verify the retrieved attestations.
+* `aaop_bundle_cache_hits_total` / `aaop_bundle_cache_misses_total`: the
+  number of bundle fetches served (or not) from the in-memory cache.
+* `aaop_bundle_fetch_deduped_total`: the number of concurrent bundle fetches
+  collapsed into a single upstream request by singleflight.
+* `aaop_bundle_cache_entries`: the current number of entries in the cache.
+
+## Bundle cache
+
+A burst of admission requests for the same image — for example a workload
+rolling out across many clusters at once — produces many concurrent validations
+for the same reference. Each one would otherwise make its own OCI round-trip,
+and that concurrent load is what pushes fetches past the admission timeout.
+
+The provider fronts the OCI fetch with a short-TTL in-memory cache and
+[singleflight](https://pkg.go.dev/golang.org/x/sync/singleflight)
+de-duplication, so repeat validations of a stable digest are served from memory
+and a burst of concurrent identical fetches collapses into a single upstream
+request. The TTL is configured with `-bundle-cache-ttl` (default `60s`; set to
+`0` to disable). Failed fetches are not cached.
 
 Each request is also logged with a `request_id`, `image_count`, and, for
 per-image log lines, an `image_index` (1-based position within the

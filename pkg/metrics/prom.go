@@ -60,4 +60,28 @@ var (
 		Help:    "The number of images (keys) included in a single provider request",
 		Buckets: []float64{1, 2, 3, 5, 10, 20, 50},
 	})
+
+	//nolint: revive
+	BundleCacheHits = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "aaop_bundle_cache_hits_total",
+		Help: "The total number of bundle fetches served from the in-memory cache",
+	})
+
+	//nolint: revive
+	BundleCacheMisses = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "aaop_bundle_cache_misses_total",
+		Help: "The total number of bundle fetches not served from the in-memory cache",
+	})
+
+	//nolint: revive
+	BundleFetchDeduped = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "aaop_bundle_fetch_deduped_total",
+		Help: "The total number of bundle fetches de-duplicated by singleflight (shared with an in-flight fetch)",
+	})
+
+	//nolint: revive
+	BundleCacheEntries = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "aaop_bundle_cache_entries",
+		Help: "The current number of entries in the in-memory bundle cache",
+	})
 )
