@@ -178,7 +178,14 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 			return nil, nil, err
 		}
 		if cerr := ctx.Err(); cerr != nil {
+			// Preserve the step from the in-flight attempt (if any) so
+			// cancellation failures still report where they occurred.
+			var step Step
+			if fe != nil {
+				step = fe.Step
+			}
 			return nil, nil, &FetchError{
+				Step:        step,
 				Kind:        kindFromContext(cerr),
 				Attempts:    attempts,
 				Recoverable: false,
@@ -255,25 +262,6 @@ func DoBundleFromName(ctx context.Context, ref name.Reference, ro []remote.Optio
 	}
 
 	return bundles, &desc.Digest, nil
-}
-
-func isAuthenticationError(err error) bool {
-	var transportErr *transport.Error
-	if !errors.As(err, &transportErr) {
-		return false
-	}
-
-	if transportErr.StatusCode == http.StatusUnauthorized || transportErr.StatusCode == http.StatusForbidden {
-		return true
-	}
-
-	for _, diagnostic := range transportErr.Errors {
-		if diagnostic.Code == transport.UnauthorizedErrorCode || diagnostic.Code == transport.DeniedErrorCode {
-			return true
-		}
-	}
-
-	return false
 }
 
 // newFetchError builds a FetchError for a failed fetch step. It derives the

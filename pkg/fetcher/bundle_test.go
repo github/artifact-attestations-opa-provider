@@ -92,54 +92,86 @@ func TestRetryBundleReturnsLastError(t *testing.T) {
 	assert.NotErrorIs(t, err, firstErr)
 }
 
-func TestIsAuthenticationError(t *testing.T) {
+func TestClassifyTransport(t *testing.T) {
 	tests := []struct {
-		name string
-		err  error
-		want bool
+		name     string
+		err      error
+		wantKind FailureKind
+		wantCode int
 	}{
 		{
-			name: "unauthorized status",
-			err:  &transport.Error{StatusCode: http.StatusUnauthorized},
-			want: true,
+			name:     "unauthorized status",
+			err:      &transport.Error{StatusCode: http.StatusUnauthorized},
+			wantKind: KindUnauthorized,
+			wantCode: http.StatusUnauthorized,
 		},
 		{
-			name: "forbidden status",
-			err:  &transport.Error{StatusCode: http.StatusForbidden},
-			want: true,
+			name:     "forbidden status",
+			err:      &transport.Error{StatusCode: http.StatusForbidden},
+			wantKind: KindForbidden,
+			wantCode: http.StatusForbidden,
+		},
+		{
+			name:     "too many requests status",
+			err:      &transport.Error{StatusCode: http.StatusTooManyRequests},
+			wantKind: KindThrottled,
+			wantCode: http.StatusTooManyRequests,
 		},
 		{
 			name: "unauthorized diagnostic",
 			err: &transport.Error{Errors: []transport.Diagnostic{
 				{Code: transport.UnauthorizedErrorCode},
 			}},
-			want: true,
+			wantKind: KindUnauthorized,
 		},
 		{
 			name: "denied diagnostic",
 			err: &transport.Error{Errors: []transport.Diagnostic{
 				{Code: transport.DeniedErrorCode},
 			}},
-			want: true,
+			wantKind: KindForbidden,
 		},
 		{
-			name: "wrapped authentication error",
-			err:  fmt.Errorf("remote get: %w", &transport.Error{StatusCode: http.StatusUnauthorized}),
-			want: true,
+			name: "too many requests diagnostic",
+			err: &transport.Error{Errors: []transport.Diagnostic{
+				{Code: transport.TooManyRequestsErrorCode},
+			}},
+			wantKind: KindThrottled,
 		},
 		{
-			name: "server error",
-			err:  &transport.Error{StatusCode: http.StatusInternalServerError},
+			name:     "wrapped authentication error",
+			err:      fmt.Errorf("remote get: %w", &transport.Error{StatusCode: http.StatusUnauthorized}),
+			wantKind: KindUnauthorized,
+			wantCode: http.StatusUnauthorized,
 		},
 		{
-			name: "ordinary error",
-			err:  errors.New("connection reset"),
+			name:     "server error is not auth",
+			err:      &transport.Error{StatusCode: http.StatusInternalServerError},
+			wantKind: KindUnknown,
+			wantCode: http.StatusInternalServerError,
+		},
+		{
+			name:     "deadline exceeded",
+			err:      context.DeadlineExceeded,
+			wantKind: KindTimeout,
+		},
+		{
+			name:     "context canceled",
+			err:      context.Canceled,
+			wantKind: KindCanceled,
+		},
+		{
+			name:     "ordinary error",
+			err:      errors.New("connection reset"),
+			wantKind: KindUnknown,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			assert.Equal(t, test.want, isAuthenticationError(test.err))
+			kind, code := classifyTransport(test.err)
+			assert.Equal(t, test.wantKind, kind)
+			assert.Equal(t, test.wantCode, code)
 		})
 	}
 }
@@ -193,6 +225,20 @@ func TestNewFetchErrorClassifiesThrottling(t *testing.T) {
 	})
 	assert.Equal(t, KindThrottled, fe.Kind)
 	assert.True(t, fe.Recoverable, "throttling should be retried")
+}
+
+func TestRetryBundlePreservesStepOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+
+	_, _, err := retryBundle(ctx, 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		cancel()
+		return nil, nil, newReferrersError(errors.New("boom"))
+	})
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindCanceled, fe.Kind)
+	assert.Equal(t, StepReferrers, fe.Step, "cancellation error should preserve the in-flight step")
 }
 
 func TestRetryBundleTimeoutSetsAttemptsAndReason(t *testing.T) {
