@@ -5,7 +5,12 @@ set -u
 set -o pipefail
 
 metrics_failed() {
-    curl -s http://localhost:9090/metrics | grep ^aaop_attestations_retrieved_fail | sed 's/aaop_attestations_retrieved_fail //g' | tr -d '\n'
+    # aaop_attestations_retrieved_fail is a labeled counter
+    # (aaop_attestations_retrieved_fail{reason="..."} N), so sum the value
+    # (last field) across all reason series and print the integer total.
+    # Filtering in awk avoids grep exiting non-zero (pipefail) when no
+    # failures have been recorded yet.
+    curl -s http://localhost:9090/metrics | awk '/^aaop_attestations_retrieved_fail\{/ {sum += $NF} END {printf "%d", sum}'
 }
 
 metrics_no_attestation() {
