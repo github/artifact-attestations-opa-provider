@@ -85,7 +85,7 @@ func (*mockKeyChainProvider) KeyChain(_ context.Context) (authn.Keychain, error)
 type mockBundleFetcher struct {
 }
 
-func (*mockBundleFetcher) BundleFromName(ref name.Reference, _ []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
+func (*mockBundleFetcher) BundleFromName(_ context.Context, ref name.Reference, _ []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
 	if mb, ok := bundles[ref.Name()]; ok {
 		var b bundle.Bundle
 		err := b.UnmarshalJSON([]byte(mb.bundle))
@@ -102,7 +102,7 @@ func (*mockBundleFetcher) BundleFromName(ref name.Reference, _ []remote.Option) 
 	return nil, nil, nil
 }
 
-func (*mockBundleFetcher) GetRemoteOptions(_ context.Context, _ authn.Keychain) []remote.Option {
+func (*mockBundleFetcher) GetRemoteOptions(_ authn.Keychain) []remote.Option {
 	return nil
 }
 
@@ -217,7 +217,7 @@ func TestInvalid(t *testing.T) {
 		},
 		{
 			image: brokenImageName,
-			error: "error_fetching_bundle",
+			error: "error_fetching_bundle_unknown",
 		},
 	}
 

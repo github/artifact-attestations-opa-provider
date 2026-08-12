@@ -14,6 +14,7 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/verify"
 
+	"github.com/github/artifact-attestations-opa-provider/pkg/fetcher"
 	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 )
 
@@ -34,8 +35,8 @@ type KeyChainProvider interface {
 
 // BundleFetcher fetches bundles from a remote OCI registry.
 type BundleFetcher interface {
-	BundleFromName(ref name.Reference, remoteOpts []remote.Option) ([]*bundle.Bundle, *v1.Hash, error)
-	GetRemoteOptions(ctx context.Context, kc authn.Keychain) []remote.Option
+	BundleFromName(ctx context.Context, ref name.Reference, remoteOpts []remote.Option) ([]*bundle.Bundle, *v1.Hash, error)
+	GetRemoteOptions(kc authn.Keychain) []remote.Option
 }
 
 // Provider is the implementation for the OPA Gatekeeper external data
@@ -86,7 +87,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 			"error", err)
 		return ErrorResponse(fmt.Sprintf("ERROR: KeyChain: %s", err))
 	}
-	var ro = p.bf.GetRemoteOptions(ctx, kc)
+	var ro = p.bf.GetRemoteOptions(kc)
 
 	// iterate over all image references (keys)
 	for _, key := range r.Request.Keys {
@@ -107,25 +108,36 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		start := time.Now()
-		bundles, hash, err := p.bf.BundleFromName(ref, ro)
+		bundles, hash, err := p.bf.BundleFromName(ctx, ref, ro)
 		dur := time.Since(start)
-		metrics.AttestationsRetrieved.Add(float64(len(bundles)))
+		// Record the fetch latency for both successful and failed fetches.
+		// The tail of this histogram (failed fetches timing out) is a key
+		// signal when troubleshooting registry latency, so it must include
+		// failures.
 		metrics.AttestationsPullTimer.Observe(dur.Seconds())
-		slog.Info("validate: fetched OCI bundles",
-			"count", len(bundles),
-			"duration", dur.Seconds())
 
 		if err != nil {
-			metrics.AttestationsRetrieveFail.Inc()
+			reason, step, attempts := fetcher.Classify(err)
+			metrics.AttestationsRetrieveFail.WithLabelValues(reason).Inc()
 			slog.Error("validate: error fetching bundles",
 				"image", key,
+				"reason", reason,
+				"step", step,
+				"attempts", attempts,
+				"duration_s", dur.Seconds(),
 				"error", err)
 			results = append(results, externaldata.Item{
 				Key:   key,
-				Error: "error_fetching_bundle",
+				Error: "error_fetching_bundle_" + reason,
 			})
 			continue
 		}
+
+		metrics.AttestationsRetrieved.Add(float64(len(bundles)))
+		slog.Info("validate: fetched OCI bundles",
+			"image", key,
+			"count", len(bundles),
+			"duration_s", dur.Seconds())
 
 		if len(bundles) == 0 {
 			metrics.AttestationsMissing.Inc()

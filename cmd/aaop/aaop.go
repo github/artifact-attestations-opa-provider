@@ -32,17 +32,20 @@ import (
 )
 
 var (
-	noPGI          = flag.Bool("no-public-good", false, "disable public good sigstore instance")
-	certsDir       = flag.String("certs", "", "Directory to where TLS certs are stored")
-	trustDomains   = flag.String("trust-domain", "", "comma separated trust domains to use")
-	tufRepo        = flag.String("tuf-repo", "", "URL to TUF repository")
-	tufRoot        = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
-	tufTargets     = flag.String("tuf-targets", "", "Comma separated list of targets to load as trust roots")
-	ns             = flag.String("namespace", "", "namespace the pod runs in")
-	ips            = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registries")
-	port           = flag.String("port", "8080", "port to listen to")
-	metricsPort    = flag.String("metrics-port", "9090", "port to listen to for metrics")
-	updateCABundle = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
+	noPGI             = flag.Bool("no-public-good", false, "disable public good sigstore instance")
+	certsDir          = flag.String("certs", "", "Directory to where TLS certs are stored")
+	trustDomains      = flag.String("trust-domain", "", "comma separated trust domains to use")
+	tufRepo           = flag.String("tuf-repo", "", "URL to TUF repository")
+	tufRoot           = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
+	tufTargets        = flag.String("tuf-targets", "", "Comma separated list of targets to load as trust roots")
+	ns                = flag.String("namespace", "", "namespace the pod runs in")
+	ips               = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registries")
+	port              = flag.String("port", "8080", "port to listen to")
+	metricsPort       = flag.String("metrics-port", "9090", "port to listen to for metrics")
+	bundleMaxAttempts = flag.Int("bundle-max-attempts", 3, "max attempts to fetch a bundle")
+	bundleTimeout     = flag.Duration("bundle-timeout", 3*time.Second, "timeout for a single attempt to fetch a bundle")
+	bundleDelay       = flag.Duration("bundle-delay", 0, "delay between attempts to fetch a bundle")
+	updateCABundle    = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
 )
 
 const (
@@ -66,6 +69,9 @@ func main() {
 	var err error
 
 	flag.Parse()
+	if err := configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay); err != nil {
+		log.Fatal(err)
+	}
 
 	var vCfg = app.VerifierCfg{
 		TufRoot: *tufRoot,
@@ -179,6 +185,23 @@ func main() {
 	cancel()
 	stop()
 	slog.Info("server shut down gracefully")
+}
+
+func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration) error {
+	if maxAttempts < 1 {
+		return errors.New("bundle-max-attempts must be greater than zero")
+	}
+	if timeout <= 0 {
+		return errors.New("bundle-timeout must be greater than zero")
+	}
+	if delay < 0 {
+		return errors.New("bundle-delay must not be negative")
+	}
+
+	fetcher.MaxAttempts = maxAttempts
+	fetcher.Timeout = timeout
+	fetcher.Delay = delay
+	return nil
 }
 
 // run starts the HTTP server and blocks until either the context has been cancelled

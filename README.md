@@ -80,10 +80,6 @@ during helm install.
 
 #### TLS certificates
 
-> [!NOTE]
-> Tested version of OPA Gatekeeper up to version 3.18.2 only supports
-> RSA keys for the TLS certificates.
-
 OPA Gatekeeper relies on TLS authentication when communicating with
 external data providers. There is a provided
 [script](scripts/gen_certs.sh) to generate a self signed CA and TLS
@@ -176,10 +172,11 @@ the constraint configuration is where affected resources and
 namespaces are configured.
 
 > [!NOTE]
-> OPA Gatekeeper has a hard timeout on 3 seconds, which include the
-> time for the external data provider. Be sure that you don't have
-> unnecessary attestations stored in the OCI registry as it may impact
-> the duration so that a timeout can occur.
+> OPA Gatekeeper has a configured [admission webhook
+> timeout](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#timeouts),
+> which include the time for the external data provider. Be sure that
+> you don't have unnecessary attestations stored in the OCI registry
+> as it may impact the duration so that a timeout can occur.
 
 ```mermaid
 sequenceDiagram
@@ -245,11 +242,14 @@ The metrics exposed beyond the default Prometheus metrics are:
 
 * `aaop_attestations_retrieved_total`: the total number of
   attestations downloaded from the OCI registry.
-* `aaop_attestations_retrieved_failed`: the total number of
-  failed attestations downloaded from the OCI registry.
+* `aaop_attestations_retrieved_fail`: the total number of
+  failed bundle fetches from the OCI registry. Labeled by `reason`
+  (e.g. `timeout`, `throttled`, `unauthorized`, `forbidden`,
+  `referrers_unavailable`, `descriptor_error`, `blob_error`,
+  `bundle_invalid`, `unknown`).
 * `aaop_attestations_verified_ok`: the total number of verified
   attestations.
-* `aaop_attestations_verified_failed`: the total number of
+* `aaop_attestations_verified_fail`: the total number of
   attestations that failed to verify.
 * `aaop_attestations_request_timer`: the duration in seconds for
   the validation webhook.

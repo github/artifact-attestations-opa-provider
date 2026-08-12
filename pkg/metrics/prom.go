@@ -13,10 +13,10 @@ var (
 	})
 
 	//nolint: revive
-	AttestationsRetrieveFail = promauto.NewCounter(prometheus.CounterOpts{
+	AttestationsRetrieveFail = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "aaop_attestations_retrieved_fail",
 		Help: "The total number of attestations retrieve failure",
-	})
+	}, []string{"reason"})
 
 	//nolint: revive
 	AttestationsMissing = promauto.NewCounter(prometheus.CounterOpts{
