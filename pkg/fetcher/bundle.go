@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"runtime"
 	"strings"
@@ -31,21 +32,6 @@ var (
 	// Delay between attempts to fetch bundles.
 	Delay = time.Duration(0)
 )
-
-// NonRecoverableError represent a bundle fetching error that can't
-// be recovered from.
-type NonRecoverableError struct {
-	Op  string
-	Err error
-}
-
-func (n *NonRecoverableError) Error() string {
-	return fmt.Sprintf("non recoverable error: %s: %v", n.Op, n.Err)
-}
-
-func (n *NonRecoverableError) Unwrap() error {
-	return n.Err
-}
 
 // FailureKind is a stable, low-cardinality classification of why a bundle
 // fetch failed. It is safe to use as a metric label value and a log field.
@@ -173,10 +159,6 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 			fe.Attempts = attempts
 			return nil, nil, fe
 		}
-		var nce *NonRecoverableError
-		if errors.As(err, &nce) {
-			return nil, nil, err
-		}
 		if cerr := ctx.Err(); cerr != nil {
 			// Preserve the step from the in-flight attempt (if any) so
 			// cancellation failures still report where they occurred.
@@ -192,6 +174,16 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 				Err:         cerr,
 			}
 		}
+
+		// Log each retryable attempt failure at debug level so an operator
+		// can dig into the individual failures behind a retried fetch.
+		reason, step, _ := Classify(err)
+		slog.Debug("bundle fetch attempt failed",
+			"attempt", attempts,
+			"max_attempts", maxAttempts,
+			"reason", reason,
+			"step", step,
+			"error", err)
 	}
 
 	return nil, nil, finalizeFetchError(lastErr, attempts)

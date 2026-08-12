@@ -48,19 +48,6 @@ func TestRetryBundleReturnsSuccessfulAttempt(t *testing.T) {
 	assert.Same(t, expectedHash, hash)
 }
 
-func TestRetryBundleStopsOnNonRecoverableError(t *testing.T) {
-	expectedErr := &NonRecoverableError{Op: "decode", Err: errors.New("invalid bundle")}
-	var attempts int
-
-	_, _, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
-		attempts++
-		return nil, nil, expectedErr
-	})
-
-	require.ErrorIs(t, err, expectedErr)
-	assert.Equal(t, 1, attempts)
-}
-
 func TestRetryBundleStopsWhenParentIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	var attempts int
