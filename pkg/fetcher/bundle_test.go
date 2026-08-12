@@ -180,6 +180,21 @@ func TestNewFetchErrorClassifiesAuthAsNonRecoverable(t *testing.T) {
 	assert.True(t, fe.Recoverable)
 }
 
+func TestNewFetchErrorClassifiesThrottling(t *testing.T) {
+	// HTTP 429 status-code branch.
+	fe := newFetchError(StepReferrers, KindReferrersUnavailable, &transport.Error{StatusCode: http.StatusTooManyRequests})
+	assert.Equal(t, KindThrottled, fe.Kind)
+	assert.Equal(t, http.StatusTooManyRequests, fe.StatusCode)
+	assert.True(t, fe.Recoverable, "throttling should be retried")
+
+	// TooManyRequests diagnostic-code branch (status code not populated).
+	fe = newFetchError(StepDescriptor, KindDescriptorError, &transport.Error{
+		Errors: []transport.Diagnostic{{Code: transport.TooManyRequestsErrorCode}},
+	})
+	assert.Equal(t, KindThrottled, fe.Kind)
+	assert.True(t, fe.Recoverable, "throttling should be retried")
+}
+
 func TestRetryBundleTimeoutSetsAttemptsAndReason(t *testing.T) {
 	const maxAttempts = 3
 
