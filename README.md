@@ -113,6 +113,27 @@ trustDomain=${TRUST_DOMAIN}`
 > be updated too. The format of the issuer is
 > `https://token.actions.${SUBDOMAIN}.ghe.com`.
 
+#### Filtering attestations by predicate type
+
+By default the provider retrieves **every** Sigstore bundle attached to an
+image via the OCI [Referrers
+API](https://github.com/opencontainers/distribution-spec/blob/main/spec.md#listing-referrers).
+For images with many referring artifacts this results in one registry download
+per attestation.
+
+When you know up front which attestation you need, set `predicateType` to limit
+retrieval to the **first** referrer whose `dev.sigstore.bundle.predicateType`
+[annotation](https://github.com/sigstore/cosign/blob/main/specs/BUNDLE_SPEC.md#annotations)
+matches, downloading a single attestation instead of all of them:
+
+```
+--set predicateType=https://slsa.dev/provenance/v1
+```
+
+Leave it empty (the default) to retrieve all attestations. Filtering relies on
+the `dev.sigstore.bundle.predicateType` annotation being present on the
+referrer, which GitHub's attestation tooling populates.
+
 ### Install via helm
 
 #### Using `imagePullSecrets`

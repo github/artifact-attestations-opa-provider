@@ -21,12 +21,13 @@ import (
 )
 
 var (
-	img          = flag.String("i", "", "image to verify")
-	trustDomains = flag.String("trust-domains", "", "comma separated list of trust domains for GitHub's TUF repo")
-	bundleFile   = flag.String("bundle", "", "path to a sigstore bundle JSON file on disk")
-	tufRepo      = flag.String("tuf-repo", "", "URL to custom TUF repository")
-	tufRoot      = flag.String("tuf-root", "", "path to root.json for custom TUF repository")
-	tufTargets   = flag.String("tuf-targets", "", "comma separated list of targets (trust domains) for custom TUF repo")
+	img           = flag.String("i", "", "image to verify")
+	trustDomains  = flag.String("trust-domains", "", "comma separated list of trust domains for GitHub's TUF repo")
+	bundleFile    = flag.String("bundle", "", "path to a sigstore bundle JSON file on disk")
+	tufRepo       = flag.String("tuf-repo", "", "URL to custom TUF repository")
+	tufRoot       = flag.String("tuf-root", "", "path to root.json for custom TUF repository")
+	tufTargets    = flag.String("tuf-targets", "", "comma separated list of targets (trust domains) for custom TUF repo")
+	predicateType = flag.String("predicate-type", "", "if set, only retrieve the first attestation whose dev.sigstore.bundle.predicateType annotation matches this value")
 )
 
 func main() {
@@ -39,6 +40,8 @@ func main() {
 	var err error
 
 	flag.Parse()
+
+	fetcher.PredicateType = *predicateType
 
 	if *img == "" && *bundleFile == "" {
 		fmt.Println("no image or bundle provided")

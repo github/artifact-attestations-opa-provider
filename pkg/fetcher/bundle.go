@@ -31,6 +31,22 @@ var (
 	Timeout = time.Second * 3
 	// Delay between attempts to fetch bundles.
 	Delay = time.Duration(0)
+	// PredicateType is an optional predicate-type filter. When non-empty, bundle
+	// retrieval is restricted to the first referrer whose PredicateTypeAnnotation
+	// matches this value. When empty (the default) every Sigstore bundle referrer
+	// is fetched.
+	PredicateType = ""
+)
+
+const (
+	// bundleArtifactTypePrefix is the OCI artifactType prefix that identifies a
+	// Sigstore bundle referrer, independent of the bundle format version.
+	bundleArtifactTypePrefix = "application/vnd.dev.sigstore.bundle"
+	// PredicateTypeAnnotation is the OCI referrer annotation key that records
+	// the predicate type of the DSSE-wrapped in-toto statement embedded in a
+	// Sigstore bundle, per the Sigstore bundle spec:
+	// https://github.com/sigstore/cosign/blob/main/specs/BUNDLE_SPEC.md
+	PredicateTypeAnnotation = "dev.sigstore.bundle.predicateType"
 )
 
 // FailureKind is a stable, low-cardinality classification of why a bundle
@@ -212,13 +228,10 @@ func DoBundleFromName(ctx context.Context, ref name.Reference, ro []remote.Optio
 		return nil, nil, newReferrersError(err)
 	}
 
-	bundles := make([]*bundle.Bundle, 0)
+	descriptors := selectBundleDescriptors(refManifest.Manifests, PredicateType)
+	bundles := make([]*bundle.Bundle, 0, len(descriptors))
 
-	for _, refDesc := range refManifest.Manifests {
-		if !strings.HasPrefix(refDesc.ArtifactType, "application/vnd.dev.sigstore.bundle") {
-			continue
-		}
-
+	for _, refDesc := range descriptors {
 		refImg, err := remote.Image(ref.Context().Digest(refDesc.Digest.String()), opts...)
 		if err != nil {
 			return nil, nil, newBlobError(err)
@@ -254,6 +267,34 @@ func DoBundleFromName(ctx context.Context, ref name.Reference, ro []remote.Optio
 	}
 
 	return bundles, &desc.Digest, nil
+}
+
+// selectBundleDescriptors returns the referrer descriptors that should be
+// fetched as Sigstore bundles from an image's referrers index.
+//
+// When predicateType is empty, every Sigstore bundle referrer is returned,
+// preserving the default behavior of retrieving all attestations. When
+// predicateType is set, only the first referrer whose PredicateTypeAnnotation
+// matches is returned, so the caller downloads a single attestation instead of
+// every referrer. This significantly cuts registry traffic for images with many
+// referring artifacts when the desired attestation is known up front.
+func selectBundleDescriptors(manifests []v1.Descriptor, predicateType string) []v1.Descriptor {
+	var descriptors []v1.Descriptor
+
+	for _, desc := range manifests {
+		if !strings.HasPrefix(desc.ArtifactType, bundleArtifactTypePrefix) {
+			continue
+		}
+		if predicateType == "" {
+			descriptors = append(descriptors, desc)
+			continue
+		}
+		if desc.Annotations[PredicateTypeAnnotation] == predicateType {
+			return []v1.Descriptor{desc}
+		}
+	}
+
+	return descriptors
 }
 
 // newFetchError builds a FetchError for a failed fetch step. It derives the

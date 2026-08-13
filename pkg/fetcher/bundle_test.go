@@ -256,3 +256,97 @@ func TestRetryBundleStopsOnNonRecoverableFetchError(t *testing.T) {
 	assert.Equal(t, 1, attempts)
 	assert.Equal(t, 1, fe.Attempts)
 }
+
+func TestSelectBundleDescriptors(t *testing.T) {
+	const (
+		bundleV03 = "application/vnd.dev.sigstore.bundle.v0.3+json"
+		bundleV02 = "application/vnd.dev.sigstore.bundle.v0.2+json"
+		other     = "application/vnd.oci.image.manifest.v1+json"
+		provV1    = "https://slsa.dev/provenance/v1"
+		sbom      = "https://spdx.dev/Document"
+	)
+
+	desc := func(artifactType, predicate, hex string) v1.Descriptor {
+		d := v1.Descriptor{
+			ArtifactType: artifactType,
+			Digest:       v1.Hash{Algorithm: "sha256", Hex: hex},
+		}
+		if predicate != "" {
+			d.Annotations = map[string]string{PredicateTypeAnnotation: predicate}
+		}
+		return d
+	}
+
+	tests := []struct {
+		name          string
+		manifests     []v1.Descriptor
+		predicateType string
+		want          []string
+	}{
+		{
+			name: "empty predicate returns all sigstore bundles and skips others",
+			manifests: []v1.Descriptor{
+				desc(bundleV03, provV1, "aaa"),
+				desc(other, provV1, "bbb"),
+				desc(bundleV02, "", "ccc"),
+			},
+			predicateType: "",
+			want:          []string{"aaa", "ccc"},
+		},
+		{
+			name: "predicate returns only the first matching referrer",
+			manifests: []v1.Descriptor{
+				desc(bundleV03, sbom, "aaa"),
+				desc(bundleV03, provV1, "bbb"),
+				desc(bundleV03, provV1, "ccc"),
+			},
+			predicateType: provV1,
+			want:          []string{"bbb"},
+		},
+		{
+			name: "predicate with no match returns nothing",
+			manifests: []v1.Descriptor{
+				desc(bundleV03, sbom, "aaa"),
+				desc(bundleV03, "https://example.com/custom/v1", "bbb"),
+			},
+			predicateType: provV1,
+			want:          nil,
+		},
+		{
+			name: "predicate skips non-sigstore referrers with matching annotation",
+			manifests: []v1.Descriptor{
+				desc(other, provV1, "aaa"),
+				desc(bundleV03, provV1, "bbb"),
+			},
+			predicateType: provV1,
+			want:          []string{"bbb"},
+		},
+		{
+			name: "predicate skips sigstore bundles missing the annotation",
+			manifests: []v1.Descriptor{
+				desc(bundleV03, "", "aaa"),
+				desc(bundleV03, provV1, "bbb"),
+			},
+			predicateType: provV1,
+			want:          []string{"bbb"},
+		},
+		{
+			name:          "no manifests returns nothing",
+			manifests:     nil,
+			predicateType: provV1,
+			want:          nil,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := selectBundleDescriptors(test.manifests, test.predicateType)
+
+			var hexes []string
+			for _, d := range got {
+				hexes = append(hexes, d.Digest.Hex)
+			}
+			assert.Equal(t, test.want, hexes)
+		})
+	}
+}

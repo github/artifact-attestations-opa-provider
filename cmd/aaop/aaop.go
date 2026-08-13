@@ -45,6 +45,7 @@ var (
 	bundleMaxAttempts = flag.Int("bundle-max-attempts", 3, "max attempts to fetch a bundle")
 	bundleTimeout     = flag.Duration("bundle-timeout", 3*time.Second, "timeout for a single attempt to fetch a bundle")
 	bundleDelay       = flag.Duration("bundle-delay", 0, "delay between attempts to fetch a bundle")
+	predicateType     = flag.String("predicate-type", "", "if set, only retrieve the first attestation whose dev.sigstore.bundle.predicateType annotation matches this value (e.g. https://slsa.dev/provenance/v1); empty retrieves all attestations")
 	updateCABundle    = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
 )
 
@@ -69,7 +70,7 @@ func main() {
 	var err error
 
 	flag.Parse()
-	if err := configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay); err != nil {
+	if err := configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay, *predicateType); err != nil {
 		log.Fatal(err)
 	}
 
@@ -187,7 +188,7 @@ func main() {
 	slog.Info("server shut down gracefully")
 }
 
-func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration) error {
+func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration, predicateType string) error {
 	if maxAttempts < 1 {
 		return errors.New("bundle-max-attempts must be greater than zero")
 	}
@@ -201,6 +202,7 @@ func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration) error
 	fetcher.MaxAttempts = maxAttempts
 	fetcher.Timeout = timeout
 	fetcher.Delay = delay
+	fetcher.PredicateType = predicateType
 	return nil
 }
 

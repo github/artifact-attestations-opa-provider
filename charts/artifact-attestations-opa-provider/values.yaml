@@ -11,6 +11,11 @@ certDir: /certs
 serviceAccount: opa-provider-sa
 port: 8090
 trustDomain: dotcom
+# When set, the provider retrieves only the first attestation whose
+# dev.sigstore.bundle.predicateType annotation matches this value (for example
+# https://slsa.dev/provenance/v1), instead of downloading every attestation for
+# an image. Leave empty to retrieve all attestations.
+predicateType: ""
 imagePullSecrets: aa-login-secret
 provider:
   timeout: 5

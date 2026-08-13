@@ -13,18 +13,21 @@ func TestConfigureBundleFetcher(t *testing.T) {
 	originalMaxAttempts := fetcher.MaxAttempts
 	originalTimeout := fetcher.Timeout
 	originalDelay := fetcher.Delay
+	originalPredicateType := fetcher.PredicateType
 	t.Cleanup(func() {
 		fetcher.MaxAttempts = originalMaxAttempts
 		fetcher.Timeout = originalTimeout
 		fetcher.Delay = originalDelay
+		fetcher.PredicateType = originalPredicateType
 	})
 
-	err := configureBundleFetcher(5, 750*time.Millisecond, 25*time.Millisecond)
+	err := configureBundleFetcher(5, 750*time.Millisecond, 25*time.Millisecond, "https://slsa.dev/provenance/v1")
 
 	require.NoError(t, err)
 	assert.Equal(t, 5, fetcher.MaxAttempts)
 	assert.Equal(t, 750*time.Millisecond, fetcher.Timeout)
 	assert.Equal(t, 25*time.Millisecond, fetcher.Delay)
+	assert.Equal(t, "https://slsa.dev/provenance/v1", fetcher.PredicateType)
 }
 
 func TestConfigureBundleFetcherRejectsInvalidValues(t *testing.T) {
@@ -67,13 +70,15 @@ func TestConfigureBundleFetcherRejectsInvalidValues(t *testing.T) {
 			fetcher.MaxAttempts = 9
 			fetcher.Timeout = 9 * time.Second
 			fetcher.Delay = 9 * time.Millisecond
+			fetcher.PredicateType = "sentinel"
 
-			err := configureBundleFetcher(test.maxAttempts, test.timeout, test.delay)
+			err := configureBundleFetcher(test.maxAttempts, test.timeout, test.delay, "https://slsa.dev/provenance/v1")
 
 			require.EqualError(t, err, test.errorText)
 			assert.Equal(t, 9, fetcher.MaxAttempts)
 			assert.Equal(t, 9*time.Second, fetcher.Timeout)
 			assert.Equal(t, 9*time.Millisecond, fetcher.Delay)
+			assert.Equal(t, "sentinel", fetcher.PredicateType)
 		})
 	}
 }

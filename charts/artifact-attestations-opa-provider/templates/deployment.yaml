@@ -44,6 +44,9 @@ spec:
         - -certs={{ .Values.certDir }}
         - -port={{ .Values.port }}
         - -trust-domain={{ .Values.trustDomain }}
+        {{- if .Values.predicateType }}
+        - -predicate-type={{ .Values.predicateType }}
+        {{- end }}
         - -update-ca-bundle={{ .Values.provider.tls.updateCABundle }}
         ports:
         - containerPort: {{ .Values.port }}
