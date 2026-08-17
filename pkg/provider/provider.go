@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -152,6 +153,21 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 			sem <- struct{}{}
 			wg.Go(func() {
 				defer func() { <-sem }()
+				// Recover panics from the pluggable fetcher/verifier here.
+				// The serial path runs in the HTTP request goroutine, where
+				// net/http recovers per-request panics; a panic in this child
+				// goroutine would instead crash the whole provider process.
+				// Convert it into the image's system error so one malformed
+				// request or dependency panic cannot take the provider down.
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("validate: recovered panic while verifying image",
+							"image", key,
+							"panic", r,
+							"stack", string(debug.Stack()))
+						sysErrs[i] = fmt.Sprintf("ERROR: panic verifying %q: %v", key, r)
+					}
+				}()
 				items[i], sysErrs[i] = p.validateImage(ctx, key, ro)
 			})
 		}

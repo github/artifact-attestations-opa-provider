@@ -251,6 +251,16 @@ func (*erroringVerifier) Verify(_ []*bundle.Bundle, _ *v1.Hash) ([]*verify.Verif
 	return nil, errors.New("verification blew up")
 }
 
+// panickingBundleFetcher panics on every fetch, used to exercise the
+// concurrent worker's panic-recovery path.
+type panickingBundleFetcher struct {
+	mockBundleFetcher
+}
+
+func (*panickingBundleFetcher) BundleFromName(_ context.Context, _ name.Reference, _ []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
+	panic("boom from fetcher")
+}
+
 // barrierBundleFetcher rendezvouses the first `width` concurrent fetches at a
 // gate before letting any of them proceed. If the outer per-image loop runs
 // serially, fewer than `width` fetches ever arrive, the gate never opens and
@@ -434,6 +444,27 @@ func TestValidateConcurrentSystemError(t *testing.T) {
 	}
 
 	resp := p.Validate(context.Background(), req)
+	require.NotNil(t, resp)
+	assert.NotEmpty(t, resp.Response.SystemError)
+	assert.Empty(t, resp.Response.Items)
+}
+
+// TestValidateConcurrentRecoversPanic ensures a panic from the fetcher or
+// verifier in a worker goroutine is recovered and surfaced as a system error
+// instead of crashing the whole provider process. Without recovery this test
+// would terminate the test binary.
+func TestValidateConcurrentRecoversPanic(t *testing.T) {
+	p := New(&mockVerifier{}, &mockKeyChainProvider{}, &panickingBundleFetcher{}, WithConcurrency(4))
+
+	req := &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{"ghcr.io/example/a", "ghcr.io/example/b", "ghcr.io/example/c"},
+		},
+	}
+
+	resp := validateWithTimeout(t, p, req, 5*time.Second)
 	require.NotNil(t, resp)
 	assert.NotEmpty(t, resp.Response.SystemError)
 	assert.Empty(t, resp.Response.Items)
