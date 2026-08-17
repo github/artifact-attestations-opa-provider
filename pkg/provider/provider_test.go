@@ -344,6 +344,12 @@ func TestWithConcurrency(t *testing.T) {
 	// Values below 1 are clamped back to serial.
 	assert.Equal(t, 1, New(v, kc, bf, WithConcurrency(0)).concurrency)
 	assert.Equal(t, 1, New(v, kc, bf, WithConcurrency(-3)).concurrency)
+
+	// A single Option is read-only and safe to reuse across providers:
+	// applying it repeatedly yields the same normalized value.
+	opt := WithConcurrency(0)
+	assert.Equal(t, 1, New(v, kc, bf, opt).concurrency)
+	assert.Equal(t, 1, New(v, kc, bf, opt).concurrency)
 }
 
 // TestValidateConcurrentMatchesSerial ensures parallel per-image validation

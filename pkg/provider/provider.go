@@ -59,10 +59,13 @@ type Option func(*Provider)
 // parallelized; each image still fetches its own attestation bundles serially.
 // Values less than 1 are treated as 1.
 func WithConcurrency(n int) Option {
+	// Normalize here so the returned closure only reads n. This keeps applying
+	// an Option side-effect free, so the same Option is safe to reuse across
+	// concurrent New calls without racing on captured state.
+	if n < 1 {
+		n = 1
+	}
 	return func(p *Provider) {
-		if n < 1 {
-			n = 1
-		}
 		p.concurrency = n
 	}
 }
