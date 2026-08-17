@@ -2,8 +2,12 @@ package provider
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/github/artifact-attestations-opa-provider/pkg/verifier"
 	"github.com/stretchr/testify/assert"
@@ -237,4 +241,200 @@ func TestInvalid(t *testing.T) {
 		assert.Len(t, response.Response.Items, 1)
 		assert.Equal(t, tc.error, response.Response.Items[0].Error)
 	}
+}
+
+// erroringVerifier always fails verification, used to exercise the
+// request-level system error path.
+type erroringVerifier struct{}
+
+func (*erroringVerifier) Verify(_ []*bundle.Bundle, _ *v1.Hash) ([]*verify.VerificationResult, error) {
+	return nil, errors.New("verification blew up")
+}
+
+// barrierBundleFetcher rendezvouses the first `width` concurrent fetches at a
+// gate before letting any of them proceed. If the outer per-image loop runs
+// serially, fewer than `width` fetches ever arrive, the gate never opens and
+// the call blocks -- letting a test deterministically distinguish serial from
+// parallel execution without relying on timing. It also records the peak
+// number of simultaneous in-flight fetches.
+type barrierBundleFetcher struct {
+	mockBundleFetcher
+
+	width int
+
+	mu          sync.Mutex
+	inFlight    int
+	maxInFlight int
+	arrived     int
+	gateClosed  bool
+	gate        chan struct{}
+}
+
+func newBarrierBundleFetcher(width int) *barrierBundleFetcher {
+	return &barrierBundleFetcher{width: width, gate: make(chan struct{})}
+}
+
+func (b *barrierBundleFetcher) BundleFromName(ctx context.Context, ref name.Reference, opts []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
+	b.mu.Lock()
+	b.inFlight++
+	if b.inFlight > b.maxInFlight {
+		b.maxInFlight = b.inFlight
+	}
+	b.arrived++
+	if b.arrived >= b.width && !b.gateClosed {
+		b.gateClosed = true
+		close(b.gate)
+	}
+	b.mu.Unlock()
+
+	// Block until at least `width` fetches have arrived concurrently.
+	<-b.gate
+
+	res, h, err := b.mockBundleFetcher.BundleFromName(ctx, ref, opts)
+
+	b.mu.Lock()
+	b.inFlight--
+	b.mu.Unlock()
+
+	return res, h, err
+}
+
+func (b *barrierBundleFetcher) MaxInFlight() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.maxInFlight
+}
+
+// validateWithTimeout runs Validate on a goroutine and fails the test if it
+// does not return within d, converting a barrier deadlock (serial execution)
+// into a clear failure instead of a hung test binary.
+func validateWithTimeout(t *testing.T, p *Provider, req *externaldata.ProviderRequest, d time.Duration) *externaldata.ProviderResponse {
+	t.Helper()
+	ch := make(chan *externaldata.ProviderResponse, 1)
+	go func() {
+		ch <- p.Validate(context.Background(), req)
+	}()
+	select {
+	case resp := <-ch:
+		return resp
+	case <-time.After(d):
+		t.Fatal("Validate did not complete in time; images were not processed concurrently")
+		return nil
+	}
+}
+
+func TestWithConcurrency(t *testing.T) {
+	v := &mockVerifier{}
+	kc := &mockKeyChainProvider{}
+	bf := &mockBundleFetcher{}
+
+	// Default is serial.
+	assert.Equal(t, 1, New(v, kc, bf).concurrency)
+	assert.Equal(t, 4, New(v, kc, bf, WithConcurrency(4)).concurrency)
+	// Values below 1 are clamped back to serial.
+	assert.Equal(t, 1, New(v, kc, bf, WithConcurrency(0)).concurrency)
+	assert.Equal(t, 1, New(v, kc, bf, WithConcurrency(-3)).concurrency)
+}
+
+// TestValidateConcurrentMatchesSerial ensures parallel per-image validation
+// produces the same ordered results as the serial default.
+func TestValidateConcurrentMatchesSerial(t *testing.T) {
+	kc := &mockKeyChainProvider{}
+	bf := &mockBundleFetcher{}
+	v := &mockVerifier{}
+
+	req := &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{validImageName, "ghcr.io/example/unsigned", brokenImageName, "foo+bar"},
+		},
+	}
+
+	serial := New(v, kc, bf).Validate(context.Background(), req)
+	concurrent := New(v, kc, bf, WithConcurrency(4)).Validate(context.Background(), req)
+
+	require.Len(t, serial.Response.Items, 4)
+	require.Len(t, concurrent.Response.Items, len(serial.Response.Items))
+	assert.Empty(t, serial.Response.SystemError)
+	assert.Empty(t, concurrent.Response.SystemError)
+
+	for i := range serial.Response.Items {
+		assert.Equal(t, serial.Response.Items[i].Key, concurrent.Response.Items[i].Key)
+		assert.Equal(t, serial.Response.Items[i].Error, concurrent.Response.Items[i].Error)
+	}
+
+	// Ordering is preserved and each key maps to its expected outcome.
+	assert.Equal(t, validImageName, concurrent.Response.Items[0].Key)
+	assert.Equal(t, "invalid_signature", concurrent.Response.Items[0].Error)
+	assert.Equal(t, "image_unsigned", concurrent.Response.Items[1].Error)
+	assert.Equal(t, "error_fetching_bundle_unknown", concurrent.Response.Items[2].Error)
+	assert.Equal(t, "invalid_reference", concurrent.Response.Items[3].Error)
+}
+
+// TestValidateProcessesImagesConcurrently proves the outer per-image loop runs
+// in parallel: all images must reach the fetcher's barrier simultaneously.
+func TestValidateProcessesImagesConcurrently(t *testing.T) {
+	const n = 4
+	bf := newBarrierBundleFetcher(n)
+	p := New(&mockVerifier{}, &mockKeyChainProvider{}, bf, WithConcurrency(n))
+
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("ghcr.io/example/image-%d", i)
+	}
+	req := &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request:    externaldata.Request{Keys: keys},
+	}
+
+	resp := validateWithTimeout(t, p, req, 5*time.Second)
+	require.NotNil(t, resp)
+	assert.Len(t, resp.Response.Items, n)
+	assert.Equal(t, n, bf.MaxInFlight())
+}
+
+// TestValidateBoundsConcurrency verifies the worker pool never exceeds the
+// configured limit even when the request has more images than the limit.
+func TestValidateBoundsConcurrency(t *testing.T) {
+	const limit = 2
+	const keys = 4
+	bf := newBarrierBundleFetcher(limit)
+	p := New(&mockVerifier{}, &mockKeyChainProvider{}, bf, WithConcurrency(limit))
+
+	imageKeys := make([]string, keys)
+	for i := range imageKeys {
+		imageKeys[i] = fmt.Sprintf("ghcr.io/example/image-%d", i)
+	}
+	req := &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request:    externaldata.Request{Keys: imageKeys},
+	}
+
+	resp := validateWithTimeout(t, p, req, 5*time.Second)
+	require.NotNil(t, resp)
+	assert.Len(t, resp.Response.Items, keys)
+	// The pool reaches, but never exceeds, the configured limit.
+	assert.Equal(t, limit, bf.MaxInFlight())
+}
+
+// TestValidateConcurrentSystemError ensures a verification error still yields a
+// request-level system error response when images are processed in parallel.
+func TestValidateConcurrentSystemError(t *testing.T) {
+	p := New(&erroringVerifier{}, &mockKeyChainProvider{}, &mockBundleFetcher{}, WithConcurrency(4))
+
+	req := &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{validImageName, validImageName},
+		},
+	}
+
+	resp := p.Validate(context.Background(), req)
+	require.NotNil(t, resp)
+	assert.NotEmpty(t, resp.Response.SystemError)
+	assert.Empty(t, resp.Response.Items)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -42,18 +43,43 @@ type BundleFetcher interface {
 // Provider is the implementation for the OPA Gatekeeper external data
 // provider.
 type Provider struct {
-	v  Verifier
-	kc KeyChainProvider
-	bf BundleFetcher
+	v           Verifier
+	kc          KeyChainProvider
+	bf          BundleFetcher
+	concurrency int
 }
 
-// New initializes a Provider with a verifier and a keychain provider.
-func New(v Verifier, k KeyChainProvider, bf BundleFetcher) *Provider {
-	return &Provider{
-		v:  v,
-		kc: k,
-		bf: bf,
+// Option configures optional Provider behavior.
+type Option func(*Provider)
+
+// WithConcurrency sets the maximum number of images that are verified
+// concurrently within a single request. A value of 1 (the default) preserves
+// the original serial per-image processing. Only the outer, per-image loop is
+// parallelized; each image still fetches its own attestation bundles serially.
+// Values less than 1 are treated as 1.
+func WithConcurrency(n int) Option {
+	return func(p *Provider) {
+		if n < 1 {
+			n = 1
+		}
+		p.concurrency = n
 	}
+}
+
+// New initializes a Provider with a verifier and a keychain provider. By
+// default images within a request are verified serially; pass WithConcurrency
+// to verify multiple images in parallel.
+func New(v Verifier, k KeyChainProvider, bf BundleFetcher, opts ...Option) *Provider {
+	p := &Provider{
+		v:           v,
+		kc:          k,
+		bf:          bf,
+		concurrency: 1,
+	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 // Validate implements the OPA Gatekeeper external data provider per
@@ -65,7 +91,6 @@ func New(v Verifier, k KeyChainProvider, bf BundleFetcher) *Provider {
 // This means that during verification, no identity is verified, only that
 // cryptographic properties holds up given the configured trust roots.
 func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest) *externaldata.ProviderResponse {
-	var results = []externaldata.Item{}
 	var resp = externaldata.ProviderResponse{
 		APIVersion: apiVersion,
 		Kind:       "ProviderResponse",
@@ -89,106 +114,160 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 	}
 	var ro = p.bf.GetRemoteOptions(kc)
 
-	// iterate over all image references (keys)
-	for _, key := range r.Request.Keys {
-		var res []*verify.VerificationResult
-		var ref name.Reference
+	var keys = r.Request.Keys
+	var items = make([]externaldata.Item, len(keys))
+	// A non-empty entry signals a request-level system error (a verification
+	// failure) raised while processing the image at the same index.
+	var sysErrs = make([]string, len(keys))
 
-		slog.Info("validate: verify signature",
-			"image", key)
-		if ref, err = name.ParseReference(key); err != nil {
-			slog.Error("validate: error parsing reference",
-				"image", key,
-				"error", err)
-			results = append(results, externaldata.Item{
-				Key:   key,
-				Error: "invalid_reference",
-			})
-			continue
+	// Determine the effective per-request image concurrency. A value of 1
+	// preserves the original serial behavior; higher values verify the
+	// request's images in parallel using a bounded worker pool. Only this
+	// outer, per-image loop is parallelized -- each image still fetches its
+	// own attestation bundles serially, on the shared request context.
+	var concurrency = p.concurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if concurrency > len(keys) {
+		concurrency = len(keys)
+	}
+
+	if concurrency <= 1 {
+		// Serial path: verify images one at a time and, as before, abort the
+		// whole request on the first verification (system) error.
+		for i, key := range keys {
+			items[i], sysErrs[i] = p.validateImage(ctx, key, ro)
+			if sysErrs[i] != "" {
+				return ErrorResponse(sysErrs[i])
+			}
 		}
-
-		start := time.Now()
-		bundles, hash, err := p.bf.BundleFromName(ctx, ref, ro)
-		dur := time.Since(start)
-		// Record the fetch latency for both successful and failed fetches.
-		// The tail of this histogram (failed fetches timing out) is a key
-		// signal when troubleshooting registry latency, so it must include
-		// failures.
-		metrics.AttestationsPullTimer.Observe(dur.Seconds())
-
-		if err != nil {
-			reason, step, attempts := fetcher.Classify(err)
-			metrics.AttestationsRetrieveFail.WithLabelValues(reason).Inc()
-			slog.Error("validate: error fetching bundles",
-				"image", key,
-				"reason", reason,
-				"step", step,
-				"attempts", attempts,
-				"duration_s", dur.Seconds(),
-				"error", err)
-			results = append(results, externaldata.Item{
-				Key:   key,
-				Error: "error_fetching_bundle_" + reason,
-			})
-			continue
-		}
-
-		metrics.AttestationsRetrieved.Add(float64(len(bundles)))
-		slog.Info("validate: fetched OCI bundles",
-			"image", key,
-			"count", len(bundles),
-			"duration_s", dur.Seconds())
-
-		if len(bundles) == 0 {
-			metrics.AttestationsMissing.Inc()
-			slog.Info("validate: no bundles",
-				"image", key)
-			results = append(results, externaldata.Item{
-				Key:   key,
-				Error: "image_unsigned",
-			})
-			continue
-		}
-
-		start = time.Now()
-		res, err = p.v.Verify(bundles, hash)
-		dur = time.Since(start)
-		metrics.AttestationsVerTimer.Observe(dur.Seconds())
-		metrics.AttestationsVerOk.Add(float64(len(res)))
-		var fail = len(bundles) - len(res)
-		if fail > 0 {
-			metrics.AttestationsVerFail.Add(float64(fail))
-		}
-
-		if err != nil {
-			slog.Error("validate: verification error",
-				"image", key,
-				"image_digest", hash.Hex,
-				"error", err)
-			return ErrorResponse(fmt.Sprintf("ERROR: VerifyImageSignatures(%q): %v", key, err))
-		}
-
-		var bundleVerified = len(res) > 0
-		if bundleVerified {
-			slog.Info("validate: found valid signatures",
-				"count", len(res),
-				"image", key)
-			results = append(results, externaldata.Item{
-				Key:   key,
-				Value: res,
-			})
-		} else {
-			slog.Info("validate: no valid signatures",
-				"image", key)
-			results = append(results, externaldata.Item{
-				Key:   key,
-				Error: "invalid_signature",
+	} else {
+		var wg sync.WaitGroup
+		// Bounded semaphore caps the number of images in flight at once.
+		var sem = make(chan struct{}, concurrency)
+		for i, key := range keys {
+			// Acquire a slot before launching so no more than `concurrency`
+			// images are verified at the same time.
+			sem <- struct{}{}
+			wg.Go(func() {
+				defer func() { <-sem }()
+				items[i], sysErrs[i] = p.validateImage(ctx, key, ro)
 			})
 		}
+		wg.Wait()
+	}
+
+	// Assemble the response in the original key order. A verification error
+	// for any image yields a system error response for the whole request; the
+	// first such error in key order wins so the result is deterministic
+	// regardless of serial or parallel execution.
+	var results = make([]externaldata.Item, 0, len(keys))
+	for i := range keys {
+		if sysErrs[i] != "" {
+			return ErrorResponse(sysErrs[i])
+		}
+		results = append(results, items[i])
 	}
 
 	resp.Response.Items = results
 	return &resp
+}
+
+// validateImage verifies a single image reference and returns the externaldata
+// item to include in the response. A non-empty second return value indicates a
+// request-level system error (a verification failure) that must abort the
+// entire request; in that case the returned item is empty.
+func (p *Provider) validateImage(ctx context.Context, key string, ro []remote.Option) (externaldata.Item, string) {
+	slog.Info("validate: verify signature",
+		"image", key)
+
+	ref, err := name.ParseReference(key)
+	if err != nil {
+		slog.Error("validate: error parsing reference",
+			"image", key,
+			"error", err)
+		return externaldata.Item{
+			Key:   key,
+			Error: "invalid_reference",
+		}, ""
+	}
+
+	start := time.Now()
+	bundles, hash, err := p.bf.BundleFromName(ctx, ref, ro)
+	dur := time.Since(start)
+	// Record the fetch latency for both successful and failed fetches.
+	// The tail of this histogram (failed fetches timing out) is a key
+	// signal when troubleshooting registry latency, so it must include
+	// failures.
+	metrics.AttestationsPullTimer.Observe(dur.Seconds())
+
+	if err != nil {
+		reason, step, attempts := fetcher.Classify(err)
+		metrics.AttestationsRetrieveFail.WithLabelValues(reason).Inc()
+		slog.Error("validate: error fetching bundles",
+			"image", key,
+			"reason", reason,
+			"step", step,
+			"attempts", attempts,
+			"duration_s", dur.Seconds(),
+			"error", err)
+		return externaldata.Item{
+			Key:   key,
+			Error: "error_fetching_bundle_" + reason,
+		}, ""
+	}
+
+	metrics.AttestationsRetrieved.Add(float64(len(bundles)))
+	slog.Info("validate: fetched OCI bundles",
+		"image", key,
+		"count", len(bundles),
+		"duration_s", dur.Seconds())
+
+	if len(bundles) == 0 {
+		metrics.AttestationsMissing.Inc()
+		slog.Info("validate: no bundles",
+			"image", key)
+		return externaldata.Item{
+			Key:   key,
+			Error: "image_unsigned",
+		}, ""
+	}
+
+	start = time.Now()
+	res, err := p.v.Verify(bundles, hash)
+	dur = time.Since(start)
+	metrics.AttestationsVerTimer.Observe(dur.Seconds())
+	metrics.AttestationsVerOk.Add(float64(len(res)))
+	var fail = len(bundles) - len(res)
+	if fail > 0 {
+		metrics.AttestationsVerFail.Add(float64(fail))
+	}
+
+	if err != nil {
+		slog.Error("validate: verification error",
+			"image", key,
+			"image_digest", hash.Hex,
+			"error", err)
+		return externaldata.Item{}, fmt.Sprintf("ERROR: VerifyImageSignatures(%q): %v", key, err)
+	}
+
+	if len(res) > 0 {
+		slog.Info("validate: found valid signatures",
+			"count", len(res),
+			"image", key)
+		return externaldata.Item{
+			Key:   key,
+			Value: res,
+		}, ""
+	}
+
+	slog.Info("validate: no valid signatures",
+		"image", key)
+	return externaldata.Item{
+		Key:   key,
+		Error: "invalid_signature",
+	}, ""
 }
 
 // ErrorResponse prepare a proper error response per the documentation

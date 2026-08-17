@@ -45,6 +45,7 @@ var (
 	bundleMaxAttempts = flag.Int("bundle-max-attempts", 3, "max attempts to fetch a bundle")
 	bundleTimeout     = flag.Duration("bundle-timeout", 3*time.Second, "timeout for a single attempt to fetch a bundle")
 	bundleDelay       = flag.Duration("bundle-delay", 0, "delay between attempts to fetch a bundle")
+	imageConcurrency  = flag.Int("image-concurrency", 1, "maximum number of images to verify concurrently within a single request; 1 (default) preserves serial per-image processing")
 	updateCABundle    = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
 )
 
@@ -71,6 +72,9 @@ func main() {
 	flag.Parse()
 	if err := configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay); err != nil {
 		log.Fatal(err)
+	}
+	if *imageConcurrency < 1 {
+		log.Fatal("image-concurrency must be greater than zero")
 	}
 
 	var vCfg = app.VerifierCfg{
@@ -142,7 +146,7 @@ func main() {
 	}
 
 	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
-	var p = provider.New(v, kc, &fetcher.DefaultBundleFetcher{})
+	var p = provider.New(v, kc, &fetcher.DefaultBundleFetcher{}, provider.WithConcurrency(*imageConcurrency))
 	var t = transport{
 		p: p,
 	}
