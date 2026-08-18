@@ -2,9 +2,13 @@ package provider
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/github/artifact-attestations-opa-provider/pkg/fetcher"
+	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 	"github.com/github/artifact-attestations-opa-provider/pkg/verifier"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,6 +19,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
 	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/verify"
 )
@@ -237,4 +242,47 @@ func TestInvalid(t *testing.T) {
 		assert.Len(t, response.Response.Items, 1)
 		assert.Equal(t, tc.error, response.Response.Items[0].Error)
 	}
+}
+
+// notFoundBundleFetcher always fails with a 404 (MANIFEST_UNKNOWN) fetch
+// error, used to exercise the non-recoverable not_found path.
+type notFoundBundleFetcher struct {
+	mockBundleFetcher
+}
+
+func (*notFoundBundleFetcher) BundleFromName(_ context.Context, _ name.Reference, _ []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
+	return nil, nil, &fetcher.FetchError{
+		Step:        fetcher.StepDescriptor,
+		Kind:        fetcher.KindNotFound,
+		Attempts:    1,
+		StatusCode:  http.StatusNotFound,
+		Recoverable: false,
+		Err:         errors.New("MANIFEST_UNKNOWN"),
+	}
+}
+
+func TestVerifyNotFound(t *testing.T) {
+	v := &mockVerifier{}
+	kc := &mockKeyChainProvider{}
+	bf := &notFoundBundleFetcher{}
+	provider := New(v, kc, bf)
+
+	before := testutil.ToFloat64(metrics.AttestationsRetrieveFail.WithLabelValues("not_found"))
+
+	request := &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{validImageName},
+		},
+	}
+
+	response := provider.Validate(context.Background(), request)
+	require.NotNil(t, response)
+	assert.Len(t, response.Response.Items, 1)
+	assert.Equal(t, "error_fetching_bundle_not_found", response.Response.Items[0].Error)
+	assert.Empty(t, response.Response.SystemError)
+
+	after := testutil.ToFloat64(metrics.AttestationsRetrieveFail.WithLabelValues("not_found"))
+	assert.InDelta(t, 1.0, after-before, 0.0001, `fail metric should be labeled reason="not_found"`)
 }

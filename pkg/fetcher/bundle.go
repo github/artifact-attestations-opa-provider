@@ -49,6 +49,10 @@ const (
 	KindForbidden FailureKind = "forbidden"
 	// KindThrottled indicates the registry returned HTTP 429 (rate limited).
 	KindThrottled FailureKind = "throttled"
+	// KindNotFound indicates the registry returned HTTP 404 (manifest/blob
+	// not found). It is deterministic within a single admission request, so
+	// it is treated as non-recoverable.
+	KindNotFound FailureKind = "not_found"
 	// KindReferrersUnavailable indicates the OCI Referrers API call failed.
 	KindReferrersUnavailable FailureKind = "referrers_unavailable"
 	// KindDescriptorError indicates the image manifest (descriptor) GET failed.
@@ -267,7 +271,8 @@ func newFetchError(step Step, fallback FailureKind, err error) *FetchError {
 	}
 	recoverable := kind != KindUnauthorized &&
 		kind != KindForbidden &&
-		kind != KindBundleInvalid
+		kind != KindBundleInvalid &&
+		kind != KindNotFound
 	return &FetchError{
 		Step:        step,
 		Kind:        kind,
@@ -309,6 +314,8 @@ func classifyTransport(err error) (FailureKind, int) {
 			return KindUnauthorized, transportErr.StatusCode
 		case http.StatusForbidden:
 			return KindForbidden, transportErr.StatusCode
+		case http.StatusNotFound:
+			return KindNotFound, transportErr.StatusCode
 		case http.StatusTooManyRequests:
 			return KindThrottled, transportErr.StatusCode
 		}
