@@ -105,6 +105,12 @@ func TestClassifyTransport(t *testing.T) {
 			wantCode: http.StatusTooManyRequests,
 		},
 		{
+			name:     "not found status",
+			err:      &transport.Error{StatusCode: http.StatusNotFound},
+			wantKind: KindNotFound,
+			wantCode: http.StatusNotFound,
+		},
+		{
 			name: "unauthorized diagnostic",
 			err: &transport.Error{Errors: []transport.Diagnostic{
 				{Code: transport.UnauthorizedErrorCode},
@@ -199,6 +205,13 @@ func TestNewFetchErrorClassifiesAuthAsNonRecoverable(t *testing.T) {
 	assert.True(t, fe.Recoverable)
 }
 
+func TestNewFetchErrorClassifiesNotFoundAsNonRecoverable(t *testing.T) {
+	fe := newFetchError(StepDescriptor, KindDescriptorError, &transport.Error{StatusCode: http.StatusNotFound})
+	assert.Equal(t, KindNotFound, fe.Kind, "404 should classify as not_found, not the descriptor fallback")
+	assert.False(t, fe.Recoverable, "404 is deterministic in-request and should not be retried")
+	assert.Equal(t, http.StatusNotFound, fe.StatusCode)
+}
+
 func TestNewFetchErrorClassifiesThrottling(t *testing.T) {
 	// HTTP 429 status-code branch.
 	fe := newFetchError(StepReferrers, KindReferrersUnavailable, &transport.Error{StatusCode: http.StatusTooManyRequests})
@@ -254,5 +267,21 @@ func TestRetryBundleStopsOnNonRecoverableFetchError(t *testing.T) {
 	require.ErrorAs(t, err, &fe)
 	assert.Equal(t, KindUnauthorized, fe.Kind)
 	assert.Equal(t, 1, attempts)
+	assert.Equal(t, 1, fe.Attempts)
+}
+
+func TestRetryBundleStopsOnNotFound(t *testing.T) {
+	var attempts int
+
+	_, _, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		attempts++
+		return nil, nil, newDescriptorError(&transport.Error{StatusCode: http.StatusNotFound})
+	})
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindNotFound, fe.Kind)
+	assert.Equal(t, http.StatusNotFound, fe.StatusCode)
+	assert.Equal(t, 1, attempts, "a 404 must not be retried")
 	assert.Equal(t, 1, fe.Attempts)
 }
