@@ -77,3 +77,50 @@ func TestConfigureBundleFetcherRejectsInvalidValues(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateBundleCacheFlags(t *testing.T) {
+	// 0 is valid for both flags: ttl=0 means "singleflight only" (time cache
+	// disabled) and max-entries=0 means "unbounded". Positive values are valid.
+	cases := []struct {
+		name       string
+		ttl        time.Duration
+		maxEntries int
+	}{
+		{"zero ttl and zero max", 0, 0},
+		{"positive ttl and max", 60 * time.Second, 4096},
+		{"zero ttl, positive max", 0, 100},
+		{"positive ttl, zero max", 30 * time.Second, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, validateBundleCacheFlags(tc.ttl, tc.maxEntries))
+		})
+	}
+}
+
+func TestValidateBundleCacheFlagsRejectsNegatives(t *testing.T) {
+	tests := []struct {
+		name       string
+		ttl        time.Duration
+		maxEntries int
+		errorText  string
+	}{
+		{
+			name:      "negative ttl",
+			ttl:       -time.Second,
+			errorText: "bundle-cache-ttl must not be negative",
+		},
+		{
+			name:       "negative max entries",
+			ttl:        time.Second,
+			maxEntries: -1,
+			errorText:  "bundle-cache-max-entries must not be negative",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateBundleCacheFlags(test.ttl, test.maxEntries)
+			require.EqualError(t, err, test.errorText)
+		})
+	}
+}

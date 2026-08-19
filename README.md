@@ -286,7 +286,12 @@ The provider fronts the OCI fetch with two complementary mechanisms:
   concurrent fetches for the same reference collapses into a single upstream
   request whose result is shared with every waiter. This is safe for any
   reference — including mutable tags — because every waiter receives a result
-  computed *now*, so there is no stale-serve window.
+  computed *now*, so there is no stale-serve window. For a tag, joiners share
+  the leader's tag→digest resolution within the (single-fetch) in-flight window;
+  that window is subsumed by the inherent, much larger admission→kubelet-pull
+  TOCTOU present for any mutable-tag admission, so it does not change the
+  security posture — use digest references (or registry-enforced tag
+  immutability) for a strong image binding.
 * **A short-TTL time cache, keyed on the resolved digest.** Repeat validations
   of the same digest are served from memory within the TTL. The time cache is
   **digest-only**: OCI tags are mutable, so a tag can be repointed to a new
@@ -304,9 +309,10 @@ caller's admission request was already cancelled at the webhook deadline. Failed
 fetches are never cached.
 
 The TTL is configured with `-bundle-cache-ttl` (default `60s`; set to `0` to
-disable caching entirely). The cache size is bounded by
-`-bundle-cache-max-entries` (default `4096`; set to `0` for unbounded); when the
-cache is full, storing a new digest evicts the soonest-to-expire entry.
+disable the **time cache** — singleflight de-duplication still runs). The cache
+size is bounded by `-bundle-cache-max-entries` (default `4096`; set to `0` for
+unbounded); when the cache is full, storing a new digest evicts the
+soonest-to-expire entry. Both flags reject negative values at startup.
 
 Each request is also logged with a `request_id`, `image_count`, and, for
 per-image log lines, an `image_index` (1-based position within the

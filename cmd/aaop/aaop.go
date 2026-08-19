@@ -74,6 +74,9 @@ func main() {
 	if err := configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay); err != nil {
 		log.Fatal(err)
 	}
+	if err := validateBundleCacheFlags(*bundleCacheTTL, *bundleCacheMaxEntries); err != nil {
+		log.Fatal(err)
+	}
 
 	var vCfg = app.VerifierCfg{
 		TufRoot: *tufRoot,
@@ -145,12 +148,16 @@ func main() {
 
 	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
 
-	var bf provider.BundleFetcher = &fetcher.DefaultBundleFetcher{}
+	// Singleflight de-duplication always runs; a non-positive -bundle-cache-ttl
+	// only disables the persisted time cache (see NewCachingBundleFetcher). The
+	// janitor goroutine, when started, lives for the process lifetime; there is
+	// no defer Stop() here because main exits via log.Fatal on error.
+	var bf provider.BundleFetcher = fetcher.NewCachingBundleFetcher(
+		&fetcher.DefaultBundleFetcher{}, *bundleCacheTTL, *bundleCacheMaxEntries)
 	if *bundleCacheTTL > 0 {
-		// The janitor goroutine lives for the process lifetime; there is no
-		// defer Stop() here because main exits via log.Fatal on error.
-		bf = fetcher.NewCachingBundleFetcher(&fetcher.DefaultBundleFetcher{}, *bundleCacheTTL, *bundleCacheMaxEntries)
 		slog.Info("bundle cache enabled", "ttl", bundleCacheTTL.String(), "max_entries", *bundleCacheMaxEntries)
+	} else {
+		slog.Info("bundle cache disabled; singleflight de-duplication only")
 	}
 	var p = provider.New(v, kc, bf)
 	var t = transport{
@@ -211,6 +218,20 @@ func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration) error
 	fetcher.MaxAttempts = maxAttempts
 	fetcher.Timeout = timeout
 	fetcher.Delay = delay
+	return nil
+}
+
+// validateBundleCacheFlags rejects nonsensical bundle-cache flag values. A ttl
+// of 0 is valid and means "singleflight only" (time cache disabled); a
+// max-entries of 0 is valid and means "unbounded". Negative values are not a
+// meaningful configuration, so they are rejected rather than silently coerced.
+func validateBundleCacheFlags(ttl time.Duration, maxEntries int) error {
+	if ttl < 0 {
+		return errors.New("bundle-cache-ttl must not be negative")
+	}
+	if maxEntries < 0 {
+		return errors.New("bundle-cache-max-entries must not be negative")
+	}
 	return nil
 }
 

@@ -168,6 +168,8 @@ func TestConcurrentTagRefsSingleflightedToOneFetch(t *testing.T) {
 	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
 	ref := mustRef(t, "ghcr.io/o/r:v1") // a tag
 
+	beforeDeduped := testutil.ToFloat64(metrics.BundleFetchDeduped)
+
 	const n = 25
 	var wg sync.WaitGroup
 	errs := make([]error, n)
@@ -187,8 +189,62 @@ func TestConcurrentTagRefsSingleflightedToOneFetch(t *testing.T) {
 	// tag still collapses to a single upstream fetch via singleflight.
 	assert.Equal(t, int32(1), inner.callCount(), "a burst of concurrent tag fetches collapses to one")
 	for _, err := range errs {
+		require.NoError(t, err)
+	}
+
+	// singleflight marks the result Shared for every recipient including the
+	// leader, but only the N-1 joiners were actually de-duplicated.
+	afterDeduped := testutil.ToFloat64(metrics.BundleFetchDeduped)
+	assert.InDelta(t, float64(n-1), afterDeduped-beforeDeduped, 1e-9, "an N-caller flight records N-1 dedupes")
+}
+
+func TestSingleflightRunsWithTimeCacheDisabled(t *testing.T) {
+	inner := &fakeFetcher{block: make(chan struct{}), bundles: []*bundle.Bundle{{}}, hash: &v1.Hash{Hex: "abc"}}
+	// ttl=0 disables the persisted time cache; singleflight must still run.
+	c := newCachingBundleFetcher(inner, 0, 0, time.Now, false)
+	// Even a digest ref is not time-cached when the cache is disabled.
+	ref := mustDigestRef(t, "a")
+
+	const n = 10
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Go(func() {
+			_, _, errs[i] = c.BundleFromName(context.Background(), ref, nil)
+		})
+	}
+
+	require.Eventually(t, func() bool { return inner.callCount() >= 1 }, time.Second, time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	close(inner.block)
+	wg.Wait()
+
+	assert.Equal(t, int32(1), inner.callCount(), "concurrent fetches collapse to one even with the time cache disabled")
+	for _, err := range errs {
 		assert.NoError(t, err)
 	}
+}
+
+func TestTimeCacheDisabledDigestNotServed(t *testing.T) {
+	inner := &fakeFetcher{bundles: []*bundle.Bundle{{}}, hash: &v1.Hash{Hex: "abc"}}
+	c := newCachingBundleFetcher(inner, 0, 0, time.Now, false)
+	ref := mustDigestRef(t, "a")
+
+	_, _, err := c.BundleFromName(context.Background(), ref, nil)
+	require.NoError(t, err)
+	_, _, err = c.BundleFromName(context.Background(), ref, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, int32(2), inner.callCount(), "with the time cache disabled, a repeat digest fetch is not served from cache")
+	_, ok := c.load(ref.Name())
+	assert.False(t, ok, "nothing is stored when the time cache is disabled")
+}
+
+func TestNewWithZeroTTLDoesNotStartJanitor(t *testing.T) {
+	// ttl=0 must not start the janitor: time.NewTicker panics on a
+	// non-positive interval, and there is nothing to sweep.
+	c := NewCachingBundleFetcher(&fakeFetcher{}, 0, 0)
+	assert.NotPanics(t, c.Stop)
 }
 
 func TestErrorsAreNotCached(t *testing.T) {

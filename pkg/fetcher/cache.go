@@ -51,6 +51,11 @@ type CachingBundleFetcher struct {
 	// means unbounded.
 	maxEntries int
 
+	// cacheEnabled reports whether the persisted time cache is active (ttl > 0).
+	// When false, singleflight still de-duplicates concurrent fetches, but no
+	// entries are read, stored, or swept and the janitor does not run.
+	cacheEnabled bool
+
 	group singleflight.Group
 
 	mu    sync.RWMutex
@@ -63,9 +68,12 @@ type CachingBundleFetcher struct {
 	once sync.Once
 }
 
-// NewCachingBundleFetcher wraps inner with a cache whose entries live for ttl
-// and is bounded to maxEntries (0 = unbounded). A background janitor evicts
-// expired entries every ttl. Call Stop to release it.
+// NewCachingBundleFetcher wraps inner with a short-TTL, digest-keyed result
+// cache (bounded to maxEntries; 0 = unbounded) fronted by singleflight
+// de-duplication. Singleflight always runs; a ttl <= 0 disables the persisted
+// time cache (and its janitor) while keeping singleflight active. When the time
+// cache is enabled a background janitor evicts expired entries every ttl; call
+// Stop to release it.
 func NewCachingBundleFetcher(inner bundleFetcher, ttl time.Duration, maxEntries int) *CachingBundleFetcher {
 	return newCachingBundleFetcher(inner, ttl, maxEntries, time.Now, true)
 }
@@ -74,14 +82,17 @@ func NewCachingBundleFetcher(inner bundleFetcher, ttl time.Duration, maxEntries 
 // a clock and skipping the background janitor.
 func newCachingBundleFetcher(inner bundleFetcher, ttl time.Duration, maxEntries int, now func() time.Time, runJanitor bool) *CachingBundleFetcher {
 	c := &CachingBundleFetcher{
-		inner:      inner,
-		ttl:        ttl,
-		maxEntries: maxEntries,
-		cache:      make(map[string]cacheEntry),
-		now:        now,
-		stop:       make(chan struct{}),
+		inner:        inner,
+		ttl:          ttl,
+		maxEntries:   maxEntries,
+		cacheEnabled: ttl > 0,
+		cache:        make(map[string]cacheEntry),
+		now:          now,
+		stop:         make(chan struct{}),
 	}
-	if runJanitor {
+	// Only run the janitor when the time cache is active: nothing is ever stored
+	// otherwise, and time.NewTicker panics on a non-positive interval.
+	if runJanitor && c.cacheEnabled {
 		go c.janitor(ttl)
 	}
 	return c
@@ -109,7 +120,11 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 	// persisted time cache.
 	_, isDigest := ref.(name.Digest)
 
-	if isDigest {
+	// timeCacheable reports whether this call may use the persisted time cache:
+	// the cache must be enabled (ttl > 0) and the reference must be a digest.
+	timeCacheable := isDigest && c.cacheEnabled
+
+	if timeCacheable {
 		if e, ok := c.load(key); ok {
 			metrics.BundleCacheHits.Inc()
 			return e.bundles, e.hash, nil
@@ -117,9 +132,27 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 		metrics.BundleCacheMisses.Inc()
 	}
 
+	// leader is set (inside the singleflight closure) only for the one call
+	// whose closure actually runs. singleflight marks the result Shared for
+	// *every* recipient including that leader, so leader lets us attribute a
+	// dedupe only to the joiners: an N-caller flight records N-1 dedupes.
+	leader := false
+
+	// Singleflight is keyed on the requested reference and always runs,
+	// independent of the time cache. For a tag it shares the leader's
+	// tag->digest resolution with every joiner in the in-flight window, so a
+	// joiner whose tag moved mid-flight receives the leader's digest. That
+	// window is bounded by a single fetch and is subsumed by the inherent, much
+	// larger admission->kubelet-pull TOCTOU present for ANY mutable-tag
+	// admission, so it does not change the security posture in kind. Keeping
+	// singleflight on tags is deliberate: collapsing the tag->digest resolve
+	// storm is the dominant cost this decorator exists to fix. Use digest
+	// references (or registry-enforced tag immutability) for a strong binding.
 	ch := c.group.DoChan(key, func() (any, error) {
+		leader = true
+
 		// Another caller may have populated the cache while this call queued.
-		if isDigest {
+		if timeCacheable {
 			if e, ok := c.load(key); ok {
 				return e, nil
 			}
@@ -138,19 +171,22 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 		}
 
 		e := cacheEntry{bundles: b, hash: h, expires: c.now().Add(c.ttl)}
-		switch {
-		case isDigest:
-			c.store(key, e)
-		case h != nil:
-			// The requested reference is a tag, which is never served from the
-			// time cache. The resolved digest, however, is content-addressed and
-			// safe, so warm a digest-keyed entry: a later request that arrives
-			// *by digest* can then be served from the cache. Reads still only
-			// happen for digest-input refs above, so this never serves a tag.
-			c.store(ref.Context().Digest(h.String()).Name(), e)
-		default:
-			// A tag ref that resolved to no attestations (nil hash): there is
-			// nothing content-addressed to key on, so nothing is cached.
+		if c.cacheEnabled {
+			switch {
+			case isDigest:
+				c.store(key, e)
+			case h != nil:
+				// The requested reference is a tag, which is never served from
+				// the time cache. The resolved digest, however, is
+				// content-addressed and safe, so warm a digest-keyed entry: a
+				// later request that arrives *by digest* can then be served.
+				// Reads still only happen for digest-input refs above, so this
+				// never serves a tag.
+				c.store(ref.Context().Digest(h.String()).Name(), e)
+			default:
+				// A tag ref that resolved to no attestations (nil hash): there
+				// is nothing content-addressed to key on, so nothing is cached.
+			}
 		}
 		return e, nil
 	})
@@ -166,7 +202,9 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 			Err:         ctx.Err(),
 		}
 	case res := <-ch:
-		if res.Shared {
+		// Shared is true for every recipient including the leader; only the
+		// joiners were actually de-duplicated, so exclude the leader.
+		if res.Shared && !leader {
 			metrics.BundleFetchDeduped.Inc()
 		}
 		if res.Err != nil {
@@ -208,13 +246,14 @@ func (c *CachingBundleFetcher) store(key string, e cacheEntry) {
 		evicted = true
 	}
 	c.cache[key] = e
-	n := len(c.cache)
+	// Publish the gauge while still holding the lock so concurrent mutations
+	// update it in the same serialized order in which they mutate the map.
+	metrics.BundleCacheEntries.Set(float64(len(c.cache)))
 	c.mu.Unlock()
 
 	if evicted {
 		metrics.BundleCacheEvictions.Inc()
 	}
-	metrics.BundleCacheEntries.Set(float64(n))
 }
 
 // evictSoonestToExpireLocked removes the entry with the earliest expiry. The
@@ -259,7 +298,8 @@ func (c *CachingBundleFetcher) sweep() {
 		}
 	}
 	n := len(c.cache)
-	c.mu.Unlock()
+	// Publish the gauge under the lock so it matches the serialized mutation.
 	metrics.BundleCacheEntries.Set(float64(n))
+	c.mu.Unlock()
 	slog.Debug("bundle cache swept", "entries", n)
 }
