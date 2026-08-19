@@ -367,7 +367,9 @@ func TestValidateLogsImageContext(t *testing.T) {
 	assert.NotEmpty(t, entry["request_id"])
 
 	assert.InDelta(t, 2.0, fetchErr["image_count"], 0.0001, "failure line should report the request image count")
-	assert.NotNil(t, fetchErr["image_index"], "failure line should report the image position")
+	// fetchErr is the last "error fetching bundles" line, i.e. the second
+	// image, so its 1-based image_index must be 2.
+	assert.InDelta(t, 2.0, fetchErr["image_index"], 0.0001, "failure line should report the 1-based image position")
 	assert.Equal(t, entry["request_id"], fetchErr["request_id"],
 		"per-image failure line should carry the request's correlation id")
 }

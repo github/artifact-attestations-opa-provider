@@ -10,6 +10,7 @@ require (
 	github.com/in-toto/attestation v1.2.0
 	github.com/open-policy-agent/frameworks/constraint v0.0.0-20250310182122-79a9477fa575
 	github.com/prometheus/client_golang v1.24.1
+	github.com/prometheus/client_model v0.6.2
 	github.com/sigstore/sigstore-go v1.3.0
 	github.com/stretchr/testify v1.12.0
 	k8s.io/apimachinery v0.36.3
@@ -105,7 +106,6 @@ require (
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
