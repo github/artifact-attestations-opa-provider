@@ -1,8 +1,11 @@
 package provider
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -20,6 +23,7 @@ import (
 
 	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/verify"
 )
@@ -285,4 +289,87 @@ func TestVerifyNotFound(t *testing.T) {
 
 	after := testutil.ToFloat64(metrics.AttestationsRetrieveFail.WithLabelValues("not_found"))
 	assert.InDelta(t, 1.0, after-before, 0.0001, `fail metric should be labeled reason="not_found"`)
+}
+
+// TestValidateRecordsImageCount verifies the request-images histogram records
+// one observation per request whose value is the number of images (keys).
+func TestValidateRecordsImageCount(t *testing.T) {
+	v := &mockVerifier{}
+	kc := &mockKeyChainProvider{}
+	bf := &mockBundleFetcher{}
+	provider := New(v, kc, bf)
+
+	readHist := func() (uint64, float64) {
+		m := &dto.Metric{}
+		require.NoError(t, metrics.AttestationsReqImages.Write(m))
+		return m.GetHistogram().GetSampleCount(), m.GetHistogram().GetSampleSum()
+	}
+
+	beforeCount, beforeSum := readHist()
+
+	request := &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{"image1", "image2", "image3"},
+		},
+	}
+	provider.Validate(context.Background(), request)
+
+	afterCount, afterSum := readHist()
+	assert.Equal(t, uint64(1), afterCount-beforeCount, "exactly one request should be observed")
+	assert.InDelta(t, 3.0, afterSum-beforeSum, 0.0001, "sum should increase by the image count")
+}
+
+// TestValidateLogsImageContext verifies that per-image log lines carry the
+// request-scoped context (request_id, image_count, image_index) so a failed
+// image fetch can be traced back to a solo vs. multi-image request.
+func TestValidateLogsImageContext(t *testing.T) {
+	v := &mockVerifier{}
+	kc := &mockKeyChainProvider{}
+	bf := &notFoundBundleFetcher{}
+	provider := New(v, kc, bf)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(prev)
+
+	request := &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{validImageName, brokenImageName},
+		},
+	}
+	provider.Validate(context.Background(), request)
+
+	var entry, fetchErr map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &m))
+		if m["msg"] == "validate: received request" {
+			entry = m
+		}
+		if m["msg"] == "validate: error fetching bundles" {
+			fetchErr = m
+		}
+	}
+
+	require.NotNil(t, entry, "expected a request entry log line")
+	require.NotNil(t, fetchErr, "expected a fetch error log line")
+
+	// JSON numbers decode as float64.
+	assert.InDelta(t, 2.0, entry["image_count"], 0.0001)
+	assert.NotEmpty(t, entry["request_id"])
+
+	assert.InDelta(t, 2.0, fetchErr["image_count"], 0.0001, "failure line should report the request image count")
+	// fetchErr is the last "error fetching bundles" line, i.e. the second
+	// image, so its 1-based image_index must be 2.
+	assert.InDelta(t, 2.0, fetchErr["image_index"], 0.0001, "failure line should report the 1-based image position")
+	assert.Equal(t, entry["request_id"], fetchErr["request_id"],
+		"per-image failure line should carry the request's correlation id")
 }

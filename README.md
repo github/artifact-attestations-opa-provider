@@ -253,10 +253,23 @@ The metrics exposed beyond the default Prometheus metrics are:
   attestations that failed to verify.
 * `aaop_attestations_request_timer`: the duration in seconds for
   the validation webhook.
+* `aaop_attestations_request_images`: a histogram of the number of
+  images (keys) included in a single provider request. Gatekeeper sends
+  all of a pod's images in one request, so this captures the pod's image
+  count. Use the `_bucket`/`_count`/`_sum` series to analyze the
+  distribution of images per request (e.g. single-image vs. multi-image
+  pods) and to see whether large multi-image requests are common.
 * `aaop_attestations_retrieved_timer`: the duration in seconds for the
    time it takes to download the attestations from the OCI registry.
 * `aaop_attestations_verification_timer`: the duration in seconds for
   the time it takes to verify the retrieved attestations.
+
+Each request is also logged with a `request_id`, `image_count`, and, for
+per-image log lines, an `image_index` (1-based position within the
+request). Because images in a request are processed sequentially and
+share the request deadline, these fields let a single failure line (such
+as a `canceled`/`timeout` fetch) be traced back to whether it was a solo
+validation or one image in a larger, multi-image request.
 
 ## Uninstall
 

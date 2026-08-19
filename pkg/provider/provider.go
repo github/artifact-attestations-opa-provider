@@ -10,6 +10,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/uuid"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/verify"
@@ -79,26 +80,41 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		metrics.AttestationsReqTimer.Observe(dur.Seconds())
 	}()
 
+	// Record the number of images (keys) in this request. Gatekeeper sends
+	// every image in a pod as a single request, so this captures the pod's
+	// image count. request_id/image_count/image_index are threaded through the
+	// per-image logs below so a single failure line (e.g. a fetch timeout) can
+	// be traced back to whether it was a solo or a large multi-image request.
+	var imageCount = len(r.Request.Keys)
+	var requestID = uuid.NewString()
+	var reqLog = slog.With(
+		"request_id", requestID,
+		"image_count", imageCount)
+	metrics.AttestationsReqImages.Observe(float64(imageCount))
+	reqLog.Info("validate: received request")
+
 	// Get the keychain to be able to access the OCI registry.
 	// If the keychain configured is empty, the default keychain is used
 	// which works for public registries.
 	if kc, err = p.kc.KeyChain(ctx); err != nil {
-		slog.Error("validate: error retrieving key chain",
+		reqLog.Error("validate: error retrieving key chain",
 			"error", err)
 		return ErrorResponse(fmt.Sprintf("ERROR: KeyChain: %s", err))
 	}
 	var ro = p.bf.GetRemoteOptions(kc)
 
 	// iterate over all image references (keys)
-	for _, key := range r.Request.Keys {
+	for i, key := range r.Request.Keys {
 		var res []*verify.VerificationResult
 		var ref name.Reference
 
-		slog.Info("validate: verify signature",
-			"image", key)
+		var imgLog = reqLog.With(
+			"image", key,
+			"image_index", i+1)
+
+		imgLog.Info("validate: verify signature")
 		if ref, err = name.ParseReference(key); err != nil {
-			slog.Error("validate: error parsing reference",
-				"image", key,
+			imgLog.Error("validate: error parsing reference",
 				"error", err)
 			results = append(results, externaldata.Item{
 				Key:   key,
@@ -119,8 +135,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		if err != nil {
 			reason, step, attempts := fetcher.Classify(err)
 			metrics.AttestationsRetrieveFail.WithLabelValues(reason).Inc()
-			slog.Error("validate: error fetching bundles",
-				"image", key,
+			imgLog.Error("validate: error fetching bundles",
 				"reason", reason,
 				"step", step,
 				"attempts", attempts,
@@ -134,15 +149,13 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		metrics.AttestationsRetrieved.Add(float64(len(bundles)))
-		slog.Info("validate: fetched OCI bundles",
-			"image", key,
+		imgLog.Info("validate: fetched OCI bundles",
 			"count", len(bundles),
 			"duration_s", dur.Seconds())
 
 		if len(bundles) == 0 {
 			metrics.AttestationsMissing.Inc()
-			slog.Info("validate: no bundles",
-				"image", key)
+			imgLog.Info("validate: no bundles")
 			results = append(results, externaldata.Item{
 				Key:   key,
 				Error: "image_unsigned",
@@ -161,8 +174,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		if err != nil {
-			slog.Error("validate: verification error",
-				"image", key,
+			imgLog.Error("validate: verification error",
 				"image_digest", hash.Hex,
 				"error", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: VerifyImageSignatures(%q): %v", key, err))
@@ -170,16 +182,14 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 
 		var bundleVerified = len(res) > 0
 		if bundleVerified {
-			slog.Info("validate: found valid signatures",
-				"count", len(res),
-				"image", key)
+			imgLog.Info("validate: found valid signatures",
+				"count", len(res))
 			results = append(results, externaldata.Item{
 				Key:   key,
 				Value: res,
 			})
 		} else {
-			slog.Info("validate: no valid signatures",
-				"image", key)
+			imgLog.Info("validate: no valid signatures")
 			results = append(results, externaldata.Item{
 				Key:   key,
 				Error: "invalid_signature",
