@@ -264,10 +264,14 @@ The metrics exposed beyond the default Prometheus metrics are:
 * `aaop_attestations_verification_timer`: the duration in seconds for
   the time it takes to verify the retrieved attestations.
 * `aaop_bundle_cache_hits_total` / `aaop_bundle_cache_misses_total`: the
-  number of bundle fetches served (or not) from the in-memory cache.
+  number of digest-keyed bundle fetches served (or not) from the in-memory
+  time cache. Only digest references consult the time cache (see below), so
+  these count digest lookups only.
 * `aaop_bundle_fetch_deduped_total`: the number of concurrent bundle fetches
   collapsed into a single upstream request by singleflight.
 * `aaop_bundle_cache_entries`: the current number of entries in the cache.
+* `aaop_bundle_cache_evictions_total`: the number of cache entries evicted
+  because the cache reached its `-bundle-cache-max-entries` size cap.
 
 ## Bundle cache
 
@@ -276,12 +280,33 @@ rolling out across many clusters at once — produces many concurrent validation
 for the same reference. Each one would otherwise make its own OCI round-trip,
 and that concurrent load is what pushes fetches past the admission timeout.
 
-The provider fronts the OCI fetch with a short-TTL in-memory cache and
-[singleflight](https://pkg.go.dev/golang.org/x/sync/singleflight)
-de-duplication, so repeat validations of a stable digest are served from memory
-and a burst of concurrent identical fetches collapses into a single upstream
-request. The TTL is configured with `-bundle-cache-ttl` (default `60s`; set to
-`0` to disable). Failed fetches are not cached.
+The provider fronts the OCI fetch with two complementary mechanisms:
+
+* **Singleflight de-duplication**, keyed on the requested reference. A burst of
+  concurrent fetches for the same reference collapses into a single upstream
+  request whose result is shared with every waiter. This is safe for any
+  reference — including mutable tags — because every waiter receives a result
+  computed *now*, so there is no stale-serve window.
+* **A short-TTL time cache, keyed on the resolved digest.** Repeat validations
+  of the same digest are served from memory within the TTL. The time cache is
+  **digest-only**: OCI tags are mutable, so a tag can be repointed to a new
+  digest within the TTL window. Serving a tag from a persisted entry could
+  therefore return a verification result for a digest the tag no longer points
+  to — an admission bypass. Digest references are content-addressed and cannot
+  move, so they are always safe to cache. Tag references are still
+  de-duplicated by singleflight; they are simply never read from or written to
+  the time cache. (On a successful tag fetch the resolved digest is warmed into
+  the cache, so a later request that arrives *by digest* can be served.)
+
+The de-duplicated fetch runs on a context detached from the triggering caller
+(`context.WithoutCancel`), so it completes and warms the cache even if that
+caller's admission request was already cancelled at the webhook deadline. Failed
+fetches are never cached.
+
+The TTL is configured with `-bundle-cache-ttl` (default `60s`; set to `0` to
+disable caching entirely). The cache size is bounded by
+`-bundle-cache-max-entries` (default `4096`; set to `0` for unbounded); when the
+cache is full, storing a new digest evicts the soonest-to-expire entry.
 
 Each request is also logged with a `request_id`, `image_count`, and, for
 per-image log lines, an `image_index` (1-based position within the

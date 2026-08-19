@@ -84,4 +84,10 @@ var (
 		Name: "aaop_bundle_cache_entries",
 		Help: "The current number of entries in the in-memory bundle cache",
 	})
+
+	//nolint: revive
+	BundleCacheEvictions = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "aaop_bundle_cache_evictions_total",
+		Help: "The total number of bundle cache entries evicted due to the size cap",
+	})
 )

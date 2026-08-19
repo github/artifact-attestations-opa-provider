@@ -46,6 +46,11 @@ type CachingBundleFetcher struct {
 	inner bundleFetcher
 	ttl   time.Duration
 
+	// maxEntries bounds the size of the time cache. When it is >0 and the cache
+	// is full, storing a new key first evicts the soonest-to-expire entry. 0
+	// means unbounded.
+	maxEntries int
+
 	group singleflight.Group
 
 	mu    sync.RWMutex
@@ -58,21 +63,23 @@ type CachingBundleFetcher struct {
 	once sync.Once
 }
 
-// NewCachingBundleFetcher wraps inner with a cache whose entries live for ttl.
-// A background janitor evicts expired entries every ttl. Call Stop to release it.
-func NewCachingBundleFetcher(inner bundleFetcher, ttl time.Duration) *CachingBundleFetcher {
-	return newCachingBundleFetcher(inner, ttl, time.Now, true)
+// NewCachingBundleFetcher wraps inner with a cache whose entries live for ttl
+// and is bounded to maxEntries (0 = unbounded). A background janitor evicts
+// expired entries every ttl. Call Stop to release it.
+func NewCachingBundleFetcher(inner bundleFetcher, ttl time.Duration, maxEntries int) *CachingBundleFetcher {
+	return newCachingBundleFetcher(inner, ttl, maxEntries, time.Now, true)
 }
 
 // newCachingBundleFetcher is the test-friendly constructor: it allows injecting
 // a clock and skipping the background janitor.
-func newCachingBundleFetcher(inner bundleFetcher, ttl time.Duration, now func() time.Time, runJanitor bool) *CachingBundleFetcher {
+func newCachingBundleFetcher(inner bundleFetcher, ttl time.Duration, maxEntries int, now func() time.Time, runJanitor bool) *CachingBundleFetcher {
 	c := &CachingBundleFetcher{
-		inner: inner,
-		ttl:   ttl,
-		cache: make(map[string]cacheEntry),
-		now:   now,
-		stop:  make(chan struct{}),
+		inner:      inner,
+		ttl:        ttl,
+		maxEntries: maxEntries,
+		cache:      make(map[string]cacheEntry),
+		now:        now,
+		stop:       make(chan struct{}),
 	}
 	if runJanitor {
 		go c.janitor(ttl)
@@ -90,16 +97,32 @@ func (c *CachingBundleFetcher) GetRemoteOptions(kc authn.Keychain) []remote.Opti
 func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Reference, ro []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
 	key := ref.Name()
 
-	if e, ok := c.load(key); ok {
-		metrics.BundleCacheHits.Inc()
-		return e.bundles, e.hash, nil
+	// The persisted time cache is digest-only. OCI tags are mutable: a registry
+	// can repoint a tag to a new digest within the TTL window, so serving a tag
+	// from a persisted entry could return a verification result for a digest the
+	// tag no longer points to -> an admission bypass. Digest references are
+	// content-addressed and cannot move, so they are always safe to cache. This
+	// property must hold in ANY environment, so we gate purely on the reference
+	// type and never on tag-naming conventions. Tag references still get
+	// singleflight de-duplication below (concurrent-only coalescing is safe
+	// regardless of tag mutability); they simply never read from or write to the
+	// persisted time cache.
+	_, isDigest := ref.(name.Digest)
+
+	if isDigest {
+		if e, ok := c.load(key); ok {
+			metrics.BundleCacheHits.Inc()
+			return e.bundles, e.hash, nil
+		}
+		metrics.BundleCacheMisses.Inc()
 	}
-	metrics.BundleCacheMisses.Inc()
 
 	ch := c.group.DoChan(key, func() (any, error) {
 		// Another caller may have populated the cache while this call queued.
-		if e, ok := c.load(key); ok {
-			return e, nil
+		if isDigest {
+			if e, ok := c.load(key); ok {
+				return e, nil
+			}
 		}
 
 		// Detach from the triggering caller's cancellation so the shared fetch
@@ -115,7 +138,20 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 		}
 
 		e := cacheEntry{bundles: b, hash: h, expires: c.now().Add(c.ttl)}
-		c.store(key, e)
+		switch {
+		case isDigest:
+			c.store(key, e)
+		case h != nil:
+			// The requested reference is a tag, which is never served from the
+			// time cache. The resolved digest, however, is content-addressed and
+			// safe, so warm a digest-keyed entry: a later request that arrives
+			// *by digest* can then be served from the cache. Reads still only
+			// happen for digest-input refs above, so this never serves a tag.
+			c.store(ref.Context().Digest(h.String()).Name(), e)
+		default:
+			// A tag ref that resolved to no attestations (nil hash): there is
+			// nothing content-addressed to key on, so nothing is cached.
+		}
 		return e, nil
 	})
 
@@ -165,10 +201,40 @@ func (c *CachingBundleFetcher) load(key string) (cacheEntry, bool) {
 
 func (c *CachingBundleFetcher) store(key string, e cacheEntry) {
 	c.mu.Lock()
+	_, exists := c.cache[key]
+	evicted := false
+	if !exists && c.maxEntries > 0 && len(c.cache) >= c.maxEntries {
+		c.evictSoonestToExpireLocked()
+		evicted = true
+	}
 	c.cache[key] = e
 	n := len(c.cache)
 	c.mu.Unlock()
+
+	if evicted {
+		metrics.BundleCacheEvictions.Inc()
+	}
 	metrics.BundleCacheEntries.Set(float64(n))
+}
+
+// evictSoonestToExpireLocked removes the entry with the earliest expiry. The
+// caller must hold c.mu. Evicting the soonest-to-expire entry is a cheap,
+// dependency-free approximation of LRU that keeps the longest-lived entries and
+// bounds memory without pulling in a cache library.
+func (c *CachingBundleFetcher) evictSoonestToExpireLocked() {
+	var (
+		victim  string
+		soonest time.Time
+		found   bool
+	)
+	for k, e := range c.cache {
+		if !found || e.expires.Before(soonest) {
+			victim, soonest, found = k, e.expires, true
+		}
+	}
+	if found {
+		delete(c.cache, victim)
+	}
 }
 
 func (c *CachingBundleFetcher) janitor(interval time.Duration) {
