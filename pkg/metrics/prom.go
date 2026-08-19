@@ -53,4 +53,11 @@ var (
 		Name: "aaop_attestations_request_timer",
 		Help: "The duration (seconds) for the entire request processing",
 	})
+
+	//nolint: revive
+	AttestationsReqImages = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "aaop_attestations_request_images",
+		Help:    "The number of images (keys) included in a single provider request",
+		Buckets: []float64{1, 2, 3, 5, 10, 20, 50},
+	})
 )
