@@ -32,6 +32,10 @@ type fakeFetcher struct {
 	// number) instead of hash. This lets a test simulate a mutable tag whose
 	// resolved digest changes between calls.
 	hashes []*v1.Hash
+	// emptyCalls is the number of leading calls that return (nil, nil, nil),
+	// simulating a digest whose referrer set is initially empty (no
+	// attestations published yet).
+	emptyCalls int32
 }
 
 func (f *fakeFetcher) BundleFromName(ctx context.Context, _ name.Reference, _ []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
@@ -45,6 +49,10 @@ func (f *fakeFetcher) BundleFromName(ctx context.Context, _ name.Reference, _ []
 	}
 	if f.err != nil {
 		return nil, nil, f.err
+	}
+	if n <= f.emptyCalls {
+		// No referrers yet: mirror DoBundleFromName's empty-result contract.
+		return nil, nil, nil
 	}
 	h := f.hash
 	if len(f.hashes) > 0 {
@@ -344,6 +352,64 @@ func TestMaxEntriesEviction(t *testing.T) {
 
 	after := testutil.ToFloat64(metrics.BundleCacheEvictions)
 	assert.InDelta(t, 1.0, after-before, 1e-9, "exactly one eviction was recorded")
+}
+
+func TestEmptyResultNotCached(t *testing.T) {
+	// The first fetch finds no referrers; a later fetch finds a
+	// newly-published attestation.
+	inner := &fakeFetcher{emptyCalls: 1, bundles: []*bundle.Bundle{{}}, hash: &v1.Hash{Hex: "abc"}}
+	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
+	ref := mustDigestRef(t, "a")
+
+	b1, _, err := c.BundleFromName(context.Background(), ref, nil)
+	require.NoError(t, err)
+	assert.Empty(t, b1, "no attestations are reported on the first fetch")
+	_, ok := c.load(ref.Name())
+	assert.False(t, ok, "an empty result is not persisted in the time cache")
+
+	// Because the empty result was not cached, the next validation re-fetches
+	// and picks up the now-published attestation instead of a stale negative.
+	b2, _, err := c.BundleFromName(context.Background(), ref, nil)
+	require.NoError(t, err)
+	assert.Len(t, b2, 1, "the newly-published attestation is returned")
+	assert.Equal(t, int32(2), inner.callCount(), "the digest is re-fetched because nothing was cached")
+}
+
+func TestAlreadyCancelledCallerDoesNotFetch(t *testing.T) {
+	inner := &fakeFetcher{bundles: []*bundle.Bundle{{}}, hash: &v1.Hash{Hex: "abc"}}
+	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
+	ref := mustDigestRef(t, "a")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled on arrival, with a cold cache
+
+	_, _, err := c.BundleFromName(ctx, ref, nil)
+	require.Error(t, err)
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindCanceled, fe.Kind)
+	assert.Equal(t, int32(0), inner.callCount(), "an already-cancelled caller does not start a fetch")
+}
+
+func TestAlreadyCancelledCallerStillServesCacheHit(t *testing.T) {
+	hash := &v1.Hash{Hex: "abc"}
+	inner := &fakeFetcher{bundles: []*bundle.Bundle{{}}, hash: hash}
+	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
+	ref := mustDigestRef(t, "a")
+
+	// Warm the cache with a live request.
+	_, _, err := c.BundleFromName(context.Background(), ref, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), inner.callCount())
+
+	// A cancelled caller is still served the (free) cache hit.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	b, h, err := c.BundleFromName(ctx, ref, nil)
+	require.NoError(t, err)
+	assert.Len(t, b, 1)
+	assert.Equal(t, hash, h)
+	assert.Equal(t, int32(1), inner.callCount(), "the cache hit is served without a new fetch")
 }
 
 func TestStopIsIdempotent(t *testing.T) {

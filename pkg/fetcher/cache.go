@@ -112,12 +112,23 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 	// can repoint a tag to a new digest within the TTL window, so serving a tag
 	// from a persisted entry could return a verification result for a digest the
 	// tag no longer points to -> an admission bypass. Digest references are
-	// content-addressed and cannot move, so they are always safe to cache. This
-	// property must hold in ANY environment, so we gate purely on the reference
-	// type and never on tag-naming conventions. Tag references still get
-	// singleflight de-duplication below (concurrent-only coalescing is safe
-	// regardless of tag mutability); they simply never read from or write to the
-	// persisted time cache.
+	// content-addressed, so digest-keying guarantees a moved tag can never
+	// substitute a *different image*.
+	//
+	// That guarantee bounds image identity, not the attestation set: the
+	// referrers for a digest are mutable, so a cached positive result can be up
+	// to one TTL stale with respect to attestations added or removed for that
+	// digest (in particular, attestation-removal-as-revocation is not reflected
+	// until the entry expires). Re-verification on a hit re-checks the cached
+	// material against the current trust root but does not re-fetch the referrer
+	// set; "no attestations" results are not cached (see below), so a
+	// newly-published attestation is picked up on the next validation.
+	//
+	// The digest-only rule must hold in ANY environment, so we gate purely on
+	// the reference type and never on tag-naming conventions. Tag references
+	// still get singleflight de-duplication below (concurrent-only coalescing is
+	// safe regardless of tag mutability); they simply never read from or write
+	// to the persisted time cache.
 	_, isDigest := ref.(name.Digest)
 
 	// timeCacheable reports whether this call may use the persisted time cache:
@@ -130,6 +141,20 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 			return e.bundles, e.hash, nil
 		}
 		metrics.BundleCacheMisses.Inc()
+	}
+
+	// If the caller is already cancelled (e.g. a timed-out multi-image
+	// Provider.Validate that keeps looping over its remaining keys), do not
+	// start a new detached fetch: it would spawn orphaned registry work under
+	// the very herd this decorator exists to relieve. A cache hit above is still
+	// served because it is free; only a dead request that missed is stopped
+	// here, mirroring the mid-flight cancellation handling below.
+	if err := ctx.Err(); err != nil {
+		return nil, nil, &FetchError{
+			Kind:        kindFromContext(err),
+			Recoverable: false,
+			Err:         err,
+		}
 	}
 
 	// leader is set (inside the singleflight closure) only for the one call
@@ -171,21 +196,27 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 		}
 
 		e := cacheEntry{bundles: b, hash: h, expires: c.now().Add(c.ttl)}
-		if c.cacheEnabled {
+		// Only cache positive results. A digest with no referrers resolves to
+		// (nil, nil, nil); caching that would pin "no attestations" for the
+		// whole TTL even after one is later published, because the referrer set
+		// is mutable even though the digest is immutable. We still return e
+		// below so this request reports no attestations, but we do not persist
+		// it: the next validation re-fetches and picks up a new attestation.
+		if c.cacheEnabled && len(b) > 0 {
 			switch {
 			case isDigest:
 				c.store(key, e)
 			case h != nil:
 				// The requested reference is a tag, which is never served from
 				// the time cache. The resolved digest, however, is
-				// content-addressed and safe, so warm a digest-keyed entry: a
-				// later request that arrives *by digest* can then be served.
-				// Reads still only happen for digest-input refs above, so this
-				// never serves a tag.
+				// content-addressed, so warm a digest-keyed entry: a later
+				// request that arrives *by digest* can then be served. Reads
+				// still only happen for digest-input refs above, so this never
+				// serves a tag.
 				c.store(ref.Context().Digest(h.String()).Name(), e)
 			default:
-				// A tag ref that resolved to no attestations (nil hash): there
-				// is nothing content-addressed to key on, so nothing is cached.
+				// Unreachable: len(b) > 0 implies a resolved digest hash (h is
+				// non-nil). Present only to satisfy switch-style linting.
 			}
 		}
 		return e, nil

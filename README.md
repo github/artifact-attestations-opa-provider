@@ -297,16 +297,29 @@ The provider fronts the OCI fetch with two complementary mechanisms:
   **digest-only**: OCI tags are mutable, so a tag can be repointed to a new
   digest within the TTL window. Serving a tag from a persisted entry could
   therefore return a verification result for a digest the tag no longer points
-  to — an admission bypass. Digest references are content-addressed and cannot
-  move, so they are always safe to cache. Tag references are still
-  de-duplicated by singleflight; they are simply never read from or written to
-  the time cache. (On a successful tag fetch the resolved digest is warmed into
-  the cache, so a later request that arrives *by digest* can be served.)
+  to — an admission bypass. Digest references are content-addressed, so
+  digest-keying guarantees a moved tag can never substitute a *different image*.
+  Tag references are still de-duplicated by singleflight; they are simply never
+  read from or written to the time cache. (On a successful tag fetch the
+  resolved digest is warmed into the cache, so a later request that arrives *by
+  digest* can be served.)
 
-The de-duplicated fetch runs on a context detached from the triggering caller
-(`context.WithoutCancel`), so it completes and warms the cache even if that
-caller's admission request was already cancelled at the webhook deadline. Failed
-fetches are never cached.
+  This bounds image *identity*, not the attestation set. The referrers for a
+  digest are mutable, so a cached positive result can be up to one TTL stale
+  with respect to attestations being **added or removed** for that digest — in
+  particular, if attestation removal is used as revocation, it is not reflected
+  until the entry expires. Re-verification on a cache hit re-checks the cached
+  material against the current trust root, but does **not** re-fetch the
+  referrer set. Results with **no attestations are not cached**, so a
+  newly-published attestation is picked up on the next validation.
+
+A fetch that has already begun runs on a context detached from the triggering
+caller (`context.WithoutCancel`), so it completes and warms the cache even if
+that caller's admission request is cancelled mid-flight at the webhook deadline.
+A request that is *already* cancelled on arrival does not start a new fetch (it
+only serves an existing cache hit), so a timed-out multi-image validation cannot
+spawn orphaned registry work during a herd. Failed fetches, and results with no
+attestations, are never cached.
 
 The TTL is configured with `-bundle-cache-ttl` (default `60s`; set to `0` to
 disable the **time cache** — singleflight de-duplication still runs). The cache
