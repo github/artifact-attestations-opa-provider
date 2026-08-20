@@ -3,6 +3,7 @@ package fetcher
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -26,9 +27,23 @@ type bundleFetcher interface {
 }
 
 type cacheEntry struct {
-	bundles []*bundle.Bundle
-	hash    *v1.Hash
-	expires time.Time
+	// serialized holds the bundles in their immutable marshalled form. The
+	// cache never stores []*bundle.Bundle: sigstore-go memoizes verification
+	// state on the *bundle.Bundle receiver, so handing the same instance to two
+	// concurrent verifications is a data race. Each caller unmarshals its own
+	// private copy from these bytes.
+	serialized [][]byte
+	hash       *v1.Hash
+	expires    time.Time
+}
+
+// flightResult is the singleflight closure's return value: the immutable cache
+// entry plus whether the closure was served from a concurrently-populated cache
+// entry (fromCache) rather than a fresh upstream fetch. It lets each recipient
+// account a hit vs a miss once the source is known.
+type flightResult struct {
+	entry     cacheEntry
+	fromCache bool
 }
 
 // CachingBundleFetcher decorates a bundle fetcher with a short-TTL result cache
@@ -138,9 +153,18 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 	if timeCacheable {
 		if e, ok := c.load(key); ok {
 			metrics.BundleCacheHits.Inc()
-			return e.bundles, e.hash, nil
+			// Unmarshal a private copy: sigstore-go memoizes verification state
+			// on the *bundle.Bundle receiver, so no two callers may share one.
+			bundles, err := deserializeBundles(e.serialized)
+			if err != nil {
+				return nil, nil, cacheCodecError(err)
+			}
+			return bundles, e.hash, nil
 		}
-		metrics.BundleCacheMisses.Inc()
+		// Do not count a miss yet. A concurrent flight may still populate the
+		// entry via the second-chance lookup below, in which case this request
+		// is really a hit; the hit/miss decision is made once the source of the
+		// result is known (see the singleflight result handling further down).
 	}
 
 	// If the caller is already cancelled (e.g. a timed-out multi-image
@@ -179,7 +203,7 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 		// Another caller may have populated the cache while this call queued.
 		if timeCacheable {
 			if e, ok := c.load(key); ok {
-				return e, nil
+				return flightResult{entry: e, fromCache: true}, nil
 			}
 		}
 
@@ -195,14 +219,22 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 			return nil, err
 		}
 
-		e := cacheEntry{bundles: b, hash: h, expires: c.now().Add(c.ttl)}
+		// Cache the immutable serialized form, never []*bundle.Bundle: every
+		// recipient below unmarshals its own private copy, so concurrent
+		// verifications cannot write memoized state onto a shared *bundle.Bundle.
+		ser, err := serializeBundles(b)
+		if err != nil {
+			return nil, cacheCodecError(err)
+		}
+
+		e := cacheEntry{serialized: ser, hash: h, expires: c.now().Add(c.ttl)}
 		// Only cache positive results. A digest with no referrers resolves to
 		// (nil, nil, nil); caching that would pin "no attestations" for the
 		// whole TTL even after one is later published, because the referrer set
 		// is mutable even though the digest is immutable. We still return e
 		// below so this request reports no attestations, but we do not persist
 		// it: the next validation re-fetches and picks up a new attestation.
-		if c.cacheEnabled && len(b) > 0 {
+		if c.cacheEnabled && len(ser) > 0 {
 			switch {
 			case isDigest:
 				c.store(key, e)
@@ -215,11 +247,11 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 				// serves a tag.
 				c.store(ref.Context().Digest(h.String()).Name(), e)
 			default:
-				// Unreachable: len(b) > 0 implies a resolved digest hash (h is
+				// Unreachable: len(ser) > 0 implies a resolved digest hash (h is
 				// non-nil). Present only to satisfy switch-style linting.
 			}
 		}
-		return e, nil
+		return flightResult{entry: e, fromCache: false}, nil
 	})
 
 	select {
@@ -241,7 +273,7 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 		if res.Err != nil {
 			return nil, nil, res.Err
 		}
-		e, ok := res.Val.(cacheEntry)
+		fr, ok := res.Val.(flightResult)
 		if !ok {
 			return nil, nil, &FetchError{
 				Kind:        KindUnknown,
@@ -249,7 +281,23 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 				Err:         errors.New("bundle cache: unexpected value type"),
 			}
 		}
-		return e.bundles, e.hash, nil
+		// Now that the source is known, account the outcome: a result served
+		// from the (possibly concurrently-populated) time cache is a hit; one
+		// backed by a fresh upstream fetch is a miss. Only digest requests
+		// consult the time cache, so only they are counted.
+		if timeCacheable {
+			if fr.fromCache {
+				metrics.BundleCacheHits.Inc()
+			} else {
+				metrics.BundleCacheMisses.Inc()
+			}
+		}
+		// Unmarshal a private copy per caller (see the hit path above).
+		bundles, err := deserializeBundles(fr.entry.serialized)
+		if err != nil {
+			return nil, nil, cacheCodecError(err)
+		}
+		return bundles, fr.entry.hash, nil
 	}
 }
 
@@ -333,4 +381,48 @@ func (c *CachingBundleFetcher) sweep() {
 	metrics.BundleCacheEntries.Set(float64(n))
 	c.mu.Unlock()
 	slog.Debug("bundle cache swept", "entries", n)
+}
+
+// serializeBundles marshals bundles to their immutable JSON form for caching.
+// The cache stores bytes rather than *bundle.Bundle so that each caller can be
+// given a private, freshly-unmarshalled copy (see deserializeBundles).
+func serializeBundles(bundles []*bundle.Bundle) ([][]byte, error) {
+	serialized := make([][]byte, len(bundles))
+	for i, b := range bundles {
+		data, err := b.MarshalJSON()
+		if err != nil {
+			return nil, fmt.Errorf("bundle cache: marshalling bundle: %w", err)
+		}
+		serialized[i] = data
+	}
+	return serialized, nil
+}
+
+// deserializeBundles unmarshals cached bytes into a fresh set of bundles, one
+// private instance per caller. sigstore-go memoizes verification state (e.g.
+// inclusion-proof/promise flags) on the *bundle.Bundle receiver during
+// verification, so callers that verify concurrently must not share instances.
+// The round-trip is lossless for verification: all material lives in the proto
+// and the memoized flags are recomputed per verification.
+func deserializeBundles(serialized [][]byte) ([]*bundle.Bundle, error) {
+	bundles := make([]*bundle.Bundle, len(serialized))
+	for i, data := range serialized {
+		b := &bundle.Bundle{}
+		if err := b.UnmarshalJSON(data); err != nil {
+			return nil, fmt.Errorf("bundle cache: unmarshalling bundle: %w", err)
+		}
+		bundles[i] = b
+	}
+	return bundles, nil
+}
+
+// cacheCodecError wraps a bundle (de)serialization failure as a
+// non-recoverable FetchError so callers handle it uniformly with other fetch
+// failures.
+func cacheCodecError(err error) *FetchError {
+	return &FetchError{
+		Kind:        KindUnknown,
+		Recoverable: false,
+		Err:         err,
+	}
 }

@@ -14,9 +14,12 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	protobundle "github.com/sigstore/protobuf-specs/gen/pb-go/bundle/v1"
+	protocommon "github.com/sigstore/protobuf-specs/gen/pb-go/common/v1"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 )
@@ -86,9 +89,35 @@ func mustDigestRef(t *testing.T, hexChar string) name.Reference {
 	return ref
 }
 
+// testBundle builds a minimal but valid sigstore bundle that survives the
+// cache's marshal/unmarshal round-trip. It has no tlog entries (so it needs no
+// inclusion proof/promise) and uses a v0.2 media type. The cache stores bundles
+// as bytes, so tests must supply real bundles rather than zero-value ones.
+func testBundle(t *testing.T) *bundle.Bundle {
+	t.Helper()
+	mediaType, err := bundle.MediaTypeString("0.2")
+	require.NoError(t, err)
+	pb := &protobundle.Bundle{
+		MediaType: mediaType,
+		VerificationMaterial: &protobundle.VerificationMaterial{
+			Content: &protobundle.VerificationMaterial_PublicKey{
+				PublicKey: &protocommon.PublicKeyIdentifier{Hint: "test-key"},
+			},
+		},
+		Content: &protobundle.Bundle_MessageSignature{
+			MessageSignature: &protocommon.MessageSignature{
+				Signature: []byte("test-signature"),
+			},
+		},
+	}
+	b, err := bundle.NewBundle(pb)
+	require.NoError(t, err)
+	return b
+}
+
 func TestCacheServesRepeatFetches(t *testing.T) {
 	hash := &v1.Hash{Algorithm: "sha256", Hex: "abc"}
-	inner := &fakeFetcher{bundles: []*bundle.Bundle{{}}, hash: hash}
+	inner := &fakeFetcher{bundles: []*bundle.Bundle{testBundle(t)}, hash: hash}
 	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
 	// Digest ref: only content-addressed references are served from the cache.
 	ref := mustDigestRef(t, "a")
@@ -104,7 +133,7 @@ func TestCacheServesRepeatFetches(t *testing.T) {
 }
 
 func TestCacheExpiresAfterTTL(t *testing.T) {
-	inner := &fakeFetcher{bundles: []*bundle.Bundle{{}}, hash: &v1.Hash{Hex: "abc"}}
+	inner := &fakeFetcher{bundles: []*bundle.Bundle{testBundle(t)}, hash: &v1.Hash{Hex: "abc"}}
 	var mu sync.Mutex
 	clock := time.Now()
 	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
@@ -128,7 +157,7 @@ func TestCacheExpiresAfterTTL(t *testing.T) {
 
 func TestDigestRefServedFromCacheWithinTTL(t *testing.T) {
 	hash := &v1.Hash{Algorithm: "sha256", Hex: "abc"}
-	inner := &fakeFetcher{bundles: []*bundle.Bundle{{}}, hash: hash}
+	inner := &fakeFetcher{bundles: []*bundle.Bundle{testBundle(t)}, hash: hash}
 	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
 	ref := mustDigestRef(t, "d")
 
@@ -150,7 +179,7 @@ func TestDigestRefServedFromCacheWithinTTL(t *testing.T) {
 func TestTagRefNotServedFromTimeCache(t *testing.T) {
 	hashA := &v1.Hash{Algorithm: "sha256", Hex: "aaa"}
 	hashB := &v1.Hash{Algorithm: "sha256", Hex: "bbb"}
-	inner := &fakeFetcher{bundles: []*bundle.Bundle{{}}, hashes: []*v1.Hash{hashA, hashB}}
+	inner := &fakeFetcher{bundles: []*bundle.Bundle{testBundle(t)}, hashes: []*v1.Hash{hashA, hashB}}
 	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
 	ref := mustRef(t, "ghcr.io/o/r:v1") // a mutable tag
 
@@ -172,7 +201,7 @@ func TestTagRefNotServedFromTimeCache(t *testing.T) {
 }
 
 func TestConcurrentTagRefsSingleflightedToOneFetch(t *testing.T) {
-	inner := &fakeFetcher{block: make(chan struct{}), bundles: []*bundle.Bundle{{}}, hash: &v1.Hash{Hex: "abc"}}
+	inner := &fakeFetcher{block: make(chan struct{}), bundles: []*bundle.Bundle{testBundle(t)}, hash: &v1.Hash{Hex: "abc"}}
 	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
 	ref := mustRef(t, "ghcr.io/o/r:v1") // a tag
 
@@ -207,7 +236,7 @@ func TestConcurrentTagRefsSingleflightedToOneFetch(t *testing.T) {
 }
 
 func TestSingleflightRunsWithTimeCacheDisabled(t *testing.T) {
-	inner := &fakeFetcher{block: make(chan struct{}), bundles: []*bundle.Bundle{{}}, hash: &v1.Hash{Hex: "abc"}}
+	inner := &fakeFetcher{block: make(chan struct{}), bundles: []*bundle.Bundle{testBundle(t)}, hash: &v1.Hash{Hex: "abc"}}
 	// ttl=0 disables the persisted time cache; singleflight must still run.
 	c := newCachingBundleFetcher(inner, 0, 0, time.Now, false)
 	// Even a digest ref is not time-cached when the cache is disabled.
@@ -234,7 +263,7 @@ func TestSingleflightRunsWithTimeCacheDisabled(t *testing.T) {
 }
 
 func TestTimeCacheDisabledDigestNotServed(t *testing.T) {
-	inner := &fakeFetcher{bundles: []*bundle.Bundle{{}}, hash: &v1.Hash{Hex: "abc"}}
+	inner := &fakeFetcher{bundles: []*bundle.Bundle{testBundle(t)}, hash: &v1.Hash{Hex: "abc"}}
 	c := newCachingBundleFetcher(inner, 0, 0, time.Now, false)
 	ref := mustDigestRef(t, "a")
 
@@ -272,7 +301,7 @@ func TestErrorsAreNotCached(t *testing.T) {
 
 func TestCallerCancellationStillWarmsCache(t *testing.T) {
 	hash := &v1.Hash{Hex: "abc"}
-	inner := &fakeFetcher{block: make(chan struct{}), bundles: []*bundle.Bundle{{}}, hash: hash}
+	inner := &fakeFetcher{block: make(chan struct{}), bundles: []*bundle.Bundle{testBundle(t)}, hash: hash}
 	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
 	ref := mustDigestRef(t, "a")
 
@@ -305,7 +334,7 @@ func TestCallerCancellationStillWarmsCache(t *testing.T) {
 }
 
 func TestDistinctRefsFetchedSeparately(t *testing.T) {
-	inner := &fakeFetcher{bundles: []*bundle.Bundle{{}}, hash: &v1.Hash{Hex: "abc"}}
+	inner := &fakeFetcher{bundles: []*bundle.Bundle{testBundle(t)}, hash: &v1.Hash{Hex: "abc"}}
 	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
 
 	_, _, err := c.BundleFromName(context.Background(), mustDigestRef(t, "a"), nil)
@@ -317,7 +346,7 @@ func TestDistinctRefsFetchedSeparately(t *testing.T) {
 }
 
 func TestMaxEntriesEviction(t *testing.T) {
-	inner := &fakeFetcher{bundles: []*bundle.Bundle{{}}, hash: &v1.Hash{Hex: "x"}}
+	inner := &fakeFetcher{bundles: []*bundle.Bundle{testBundle(t)}, hash: &v1.Hash{Hex: "x"}}
 	var mu sync.Mutex
 	clock := time.Now()
 	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
@@ -357,7 +386,7 @@ func TestMaxEntriesEviction(t *testing.T) {
 func TestEmptyResultNotCached(t *testing.T) {
 	// The first fetch finds no referrers; a later fetch finds a
 	// newly-published attestation.
-	inner := &fakeFetcher{emptyCalls: 1, bundles: []*bundle.Bundle{{}}, hash: &v1.Hash{Hex: "abc"}}
+	inner := &fakeFetcher{emptyCalls: 1, bundles: []*bundle.Bundle{testBundle(t)}, hash: &v1.Hash{Hex: "abc"}}
 	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
 	ref := mustDigestRef(t, "a")
 
@@ -376,7 +405,7 @@ func TestEmptyResultNotCached(t *testing.T) {
 }
 
 func TestAlreadyCancelledCallerDoesNotFetch(t *testing.T) {
-	inner := &fakeFetcher{bundles: []*bundle.Bundle{{}}, hash: &v1.Hash{Hex: "abc"}}
+	inner := &fakeFetcher{bundles: []*bundle.Bundle{testBundle(t)}, hash: &v1.Hash{Hex: "abc"}}
 	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
 	ref := mustDigestRef(t, "a")
 
@@ -393,7 +422,7 @@ func TestAlreadyCancelledCallerDoesNotFetch(t *testing.T) {
 
 func TestAlreadyCancelledCallerStillServesCacheHit(t *testing.T) {
 	hash := &v1.Hash{Hex: "abc"}
-	inner := &fakeFetcher{bundles: []*bundle.Bundle{{}}, hash: hash}
+	inner := &fakeFetcher{bundles: []*bundle.Bundle{testBundle(t)}, hash: hash}
 	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
 	ref := mustDigestRef(t, "a")
 
@@ -410,6 +439,62 @@ func TestAlreadyCancelledCallerStillServesCacheHit(t *testing.T) {
 	assert.Len(t, b, 1)
 	assert.Equal(t, hash, h)
 	assert.Equal(t, int32(1), inner.callCount(), "the cache hit is served without a new fetch")
+}
+
+func TestConcurrentCallersGetDistinctBundleInstances(t *testing.T) {
+	// Regression test for a data race: the cache must never hand the same
+	// *bundle.Bundle to two callers, because sigstore-go memoizes verification
+	// state on the receiver during verification. Runs under -race.
+	inner := &fakeFetcher{bundles: []*bundle.Bundle{testBundle(t)}, hash: &v1.Hash{Hex: "abc"}}
+	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
+	ref := mustDigestRef(t, "a")
+
+	const n = 25
+	var wg sync.WaitGroup
+	got := make([][]*bundle.Bundle, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Go(func() {
+			b, _, err := c.BundleFromName(context.Background(), ref, nil)
+			errs[i] = err
+			// Exercise the memoized-write path the way verification does; on
+			// distinct instances this is race-free.
+			for _, bnd := range b {
+				_, _ = bnd.TlogEntries()
+			}
+			got[i] = b
+		})
+	}
+	wg.Wait()
+
+	// Every caller must have received its own bundle instances, whether it was
+	// served from the singleflight result or from a subsequent cache hit.
+	seen := make(map[*bundle.Bundle]struct{})
+	for i := 0; i < n; i++ {
+		require.NoError(t, errs[i])
+		require.Len(t, got[i], 1)
+		b := got[i][0]
+		_, dup := seen[b]
+		assert.Falsef(t, dup, "caller %d received a *bundle.Bundle already handed to another caller", i)
+		seen[b] = struct{}{}
+	}
+	assert.Len(t, seen, n, "each caller received a distinct bundle instance")
+}
+
+func TestSerializeDeserializeRoundTrip(t *testing.T) {
+	orig := testBundle(t)
+
+	serialized, err := serializeBundles([]*bundle.Bundle{orig})
+	require.NoError(t, err)
+	require.Len(t, serialized, 1)
+
+	got, err := deserializeBundles(serialized)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+
+	assert.NotSame(t, orig, got[0], "deserialization returns a fresh instance")
+	assert.True(t, proto.Equal(orig.Bundle, got[0].Bundle),
+		"the round-trip preserves the verification-relevant bundle content")
 }
 
 func TestStopIsIdempotent(t *testing.T) {
