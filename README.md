@@ -264,9 +264,10 @@ The metrics exposed beyond the default Prometheus metrics are:
 * `aaop_attestations_verification_timer`: the duration in seconds for
   the time it takes to verify the retrieved attestations.
 * `aaop_bundle_cache_hits_total` / `aaop_bundle_cache_misses_total`: the
-  number of digest-keyed bundle fetches served (or not) from the in-memory
-  time cache. Only digest references consult the time cache (see below), so
-  these count digest lookups only.
+  number of digest-keyed bundle lookups served (hit) or not (miss) from the
+  in-memory time cache. Only digest references consult the time cache (see
+  below), so these count digest lookups only; an errored upstream fetch counts
+  as a miss.
 * `aaop_bundle_fetch_deduped_total`: the number of concurrent bundle fetches
   collapsed into a single upstream request by singleflight.
 * `aaop_bundle_cache_entries`: the current number of entries in the cache.
@@ -285,8 +286,8 @@ The provider fronts the OCI fetch with two complementary mechanisms:
 * **Singleflight de-duplication**, keyed on the requested reference. A burst of
   concurrent fetches for the same reference collapses into a single upstream
   request whose result is shared with every waiter. This is safe for any
-  reference — including mutable tags — because every waiter receives a result
-  computed *now*, so there is no stale-serve window. For a tag, joiners share
+  reference — including mutable tags — because it is concurrent-only coalescing,
+  not a persisted cache. For a tag, joiners share
   the leader's tag→digest resolution within the (single-fetch) in-flight window;
   that window is subsumed by the inherent, much larger admission→kubelet-pull
   TOCTOU present for any mutable-tag admission, so it does not change the
