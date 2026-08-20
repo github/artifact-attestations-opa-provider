@@ -235,6 +235,28 @@ func TestConcurrentTagRefsSingleflightedToOneFetch(t *testing.T) {
 	assert.InDelta(t, float64(n-1), afterDeduped-beforeDeduped, 1e-9, "an N-caller flight records N-1 dedupes")
 }
 
+func TestErroredFetchCountsAsMiss(t *testing.T) {
+	inner := &fakeFetcher{err: errors.New("boom")}
+	c := newCachingBundleFetcher(inner, time.Minute, 0, time.Now, false)
+	ref := mustDigestRef(t, "a")
+
+	// An errored upstream fetch for a digest is a miss and must be counted.
+	before := testutil.ToFloat64(metrics.BundleCacheMisses)
+	_, _, err := c.BundleFromName(context.Background(), ref, nil)
+	require.Error(t, err)
+	after := testutil.ToFloat64(metrics.BundleCacheMisses)
+	assert.InDelta(t, 1.0, after-before, 1e-9, "an errored digest fetch increments the miss counter")
+
+	// A cancellation is not a cache outcome and must not be counted as a miss.
+	beforeCancel := testutil.ToFloat64(metrics.BundleCacheMisses)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err = c.BundleFromName(ctx, ref, nil)
+	require.Error(t, err)
+	afterCancel := testutil.ToFloat64(metrics.BundleCacheMisses)
+	assert.InDelta(t, 0.0, afterCancel-beforeCancel, 1e-9, "a cancelled caller does not increment the miss counter")
+}
+
 func TestSingleflightRunsWithTimeCacheDisabled(t *testing.T) {
 	inner := &fakeFetcher{block: make(chan struct{}), bundles: []*bundle.Bundle{testBundle(t)}, hash: &v1.Hash{Hex: "abc"}}
 	// ttl=0 disables the persisted time cache; singleflight must still run.

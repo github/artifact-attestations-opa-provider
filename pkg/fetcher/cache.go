@@ -271,6 +271,14 @@ func (c *CachingBundleFetcher) BundleFromName(ctx context.Context, ref name.Refe
 			metrics.BundleFetchDeduped.Inc()
 		}
 		if res.Err != nil {
+			// An errored fetch is still an upstream-backed miss (e.g. a
+			// registry outage). Count it so failures don't undercount misses
+			// and inflate the apparent hit ratio. Gate on timeCacheable to
+			// match the success path; cancellations are handled separately and
+			// are never counted as a cache outcome.
+			if timeCacheable {
+				metrics.BundleCacheMisses.Inc()
+			}
 			return nil, nil, res.Err
 		}
 		fr, ok := res.Val.(flightResult)
