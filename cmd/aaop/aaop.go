@@ -149,9 +149,7 @@ func main() {
 	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
 
 	// Singleflight de-duplication always runs; a non-positive -bundle-cache-ttl
-	// only disables the persisted time cache (see NewCachingBundleFetcher). The
-	// janitor goroutine, when started, lives for the process lifetime; there is
-	// no defer Stop() here because main exits via log.Fatal on error.
+	// only disables the persisted time cache (see NewCachingBundleFetcher).
 	var bf provider.BundleFetcher = fetcher.NewCachingBundleFetcher(
 		&fetcher.DefaultBundleFetcher{}, *bundleCacheTTL, *bundleCacheMaxEntries)
 	if *bundleCacheTTL > 0 {
