@@ -32,14 +32,18 @@ var (
 	Timeout = time.Second * 3
 	// Delay between attempts to fetch bundles.
 	Delay = time.Duration(0)
-	// DialTimeoutOverride, TLSHandshakeTimeoutOverride, and
-	// ResponseHeaderTimeoutOverride optionally pin the corresponding registry
-	// connection-phase timeout. Zero (the default) means "derive from Timeout"
-	// via resolveTransportTimeouts; a positive value is used verbatim. They let
-	// an operator with an unusual registry or forward proxy override a single
-	// phase without restating the whole per-attempt budget.
-	DialTimeoutOverride           = time.Duration(0)
-	TLSHandshakeTimeoutOverride   = time.Duration(0)
+
+	// DialTimeoutOverride optionally pins the registry TCP dial timeout. Zero
+	// (the default) derives it from Timeout via resolveTransportTimeouts; a
+	// positive value is used verbatim.
+	DialTimeoutOverride = time.Duration(0)
+	// TLSHandshakeTimeoutOverride optionally pins the registry TLS-handshake
+	// timeout. Zero derives it from Timeout; a positive value is used verbatim.
+	TLSHandshakeTimeoutOverride = time.Duration(0)
+	// ResponseHeaderTimeoutOverride optionally pins the wait for the registry's
+	// response headers. Zero derives it from Timeout; a positive value is used
+	// verbatim. The overrides let an operator with an unusual registry or
+	// forward proxy tune a single phase without restating the whole budget.
 	ResponseHeaderTimeoutOverride = time.Duration(0)
 )
 
@@ -89,7 +93,7 @@ func resolveTransportTimeouts(bundleTimeout time.Duration) (dial, tlsHandshake, 
 	dial = pickPhaseTimeout(DialTimeoutOverride, bundleTimeout, dialTimeoutFraction)
 	tlsHandshake = pickPhaseTimeout(TLSHandshakeTimeoutOverride, bundleTimeout, tlsHandshakeTimeoutFraction)
 	responseHeader = pickPhaseTimeout(ResponseHeaderTimeoutOverride, bundleTimeout, responseHeaderTimeoutFraction)
-	return
+	return dial, tlsHandshake, responseHeader
 }
 
 // pickPhaseTimeout returns override when positive, otherwise fraction*bundleTimeout
