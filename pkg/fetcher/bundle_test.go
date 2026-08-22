@@ -317,12 +317,61 @@ func TestResolveTransportTimeoutsHonorsOverrides(t *testing.T) {
 	assert.Equal(t, 900*time.Millisecond, responseHeader, "positive override used verbatim")
 }
 
-func TestResolveTransportTimeoutsFloorsTinyBudget(t *testing.T) {
-	// A very small budget must not yield sub-100ms phase timeouts.
-	dial, tlsHandshake, responseHeader := resolveTransportTimeouts(100 * time.Millisecond)
+func TestResolveTransportTimeoutsFloorsSmallBudget(t *testing.T) {
+	// For a modestly small budget the floor keeps phase timeouts off sub-100ms
+	// values that would trip on normal latency, while still staying under the
+	// budget. At 300ms every phase (0.6/0.6/0.8 -> 180/180/240ms) is floored to
+	// 250ms, which remains < 300ms.
+	dial, tlsHandshake, responseHeader := resolveTransportTimeouts(300 * time.Millisecond)
 	assert.Equal(t, minPhaseTimeout, dial)
 	assert.Equal(t, minPhaseTimeout, tlsHandshake)
 	assert.Equal(t, minPhaseTimeout, responseHeader)
+	assert.Less(t, dial, 300*time.Millisecond)
+}
+
+func TestResolveTransportTimeoutsKeepsPhasesBelowTinyBudget(t *testing.T) {
+	// For a pathologically small budget the floor would meet or exceed the
+	// attempt budget, so the hard invariant wins: each phase falls back to its
+	// fractional value and stays strictly below the budget (a phase timeout at
+	// or above the attempt deadline could never fire first).
+	const budget = 100 * time.Millisecond
+	dial, tlsHandshake, responseHeader := resolveTransportTimeouts(budget)
+	assert.Equal(t, 60*time.Millisecond, dial)
+	assert.Equal(t, 60*time.Millisecond, tlsHandshake)
+	assert.Equal(t, 80*time.Millisecond, responseHeader)
+	assert.Less(t, dial, budget)
+	assert.Less(t, tlsHandshake, budget)
+	assert.Less(t, responseHeader, budget)
+}
+
+func TestNewRegistryDialerUsesResolvedTimeout(t *testing.T) {
+	// The dialer must carry the resolved dial timeout (the transport's
+	// DialContext closure hides it, so this is where dial-timeout regressions
+	// are caught).
+	d := newRegistryDialer(1234 * time.Millisecond)
+	assert.Equal(t, 1234*time.Millisecond, d.Timeout)
+	assert.Equal(t, 30*time.Second, d.KeepAlive)
+}
+
+func TestRegistryTransportDialContextEnforcesDialTimeout(t *testing.T) {
+	defer restoreTransportOverrides(DialTimeoutOverride, TLSHandshakeTimeoutOverride, ResponseHeaderTimeoutOverride)
+	DialTimeoutOverride = 150 * time.Millisecond
+	tr := newRegistryTransport()
+
+	// 192.0.2.1 is TEST-NET-1 (RFC 5737): reserved and unrouted, so a dial is
+	// dropped and blocks until the dial timeout fires rather than getting a
+	// fast connection-refused. This exercises the transport's DialContext
+	// end-to-end and would block far past the assertion window if the dialer
+	// reverted to go-containerregistry's stock 30s default.
+	start := time.Now()
+	conn, err := tr.DialContext(context.Background(), "tcp", "192.0.2.1:80")
+	elapsed := time.Since(start)
+	if conn != nil {
+		conn.Close()
+	}
+
+	require.Error(t, err)
+	assert.Less(t, elapsed, 5*time.Second, "dial must abort at ~DialTimeout, not the stock 30s")
 }
 
 func TestNewRegistryTransportUsesResolvedTimeouts(t *testing.T) {
@@ -362,9 +411,13 @@ func TestConfigureTransportRebuildsForCurrentTimeout(t *testing.T) {
 
 func TestGetRemoteOptionsIncludesTunedTransport(t *testing.T) {
 	// GetRemoteOptions must reuse the shared, tuned transport singleton so the
-	// connection pool is shared across requests.
+	// connection pool is shared across requests. remote.Option is an opaque
+	// closure, so the transport can't be read back out; assert the option count
+	// instead, which regresses if remote.WithTransport(registryTransport) is
+	// dropped from the list.
 	require.NotNil(t, registryTransport)
-	assert.NotEmpty(t, GetRemoteOptions(nil))
+	opts := GetRemoteOptions(nil)
+	assert.Len(t, opts, 3)
 }
 
 func restoreTransportOverrides(dial, tlsHandshake, responseHeader time.Duration) {

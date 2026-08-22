@@ -83,7 +83,8 @@ func ConfigureTransport() {
 // resolveTransportTimeouts returns the effective dial, TLS-handshake, and
 // response-header timeouts for a per-attempt budget of bundleTimeout. A positive
 // *Override is honored verbatim; a zero override derives that phase as a
-// fraction of bundleTimeout, floored at minPhaseTimeout.
+// fraction of bundleTimeout, floored at minPhaseTimeout but always kept strictly
+// below bundleTimeout.
 func resolveTransportTimeouts(bundleTimeout time.Duration) (dial, tlsHandshake, responseHeader time.Duration) {
 	dial = pickPhaseTimeout(DialTimeoutOverride, bundleTimeout, dialTimeoutFraction)
 	tlsHandshake = pickPhaseTimeout(TLSHandshakeTimeoutOverride, bundleTimeout, tlsHandshakeTimeoutFraction)
@@ -92,15 +93,37 @@ func resolveTransportTimeouts(bundleTimeout time.Duration) (dial, tlsHandshake, 
 }
 
 // pickPhaseTimeout returns override when positive, otherwise fraction*bundleTimeout
-// floored at minPhaseTimeout.
+// floored at minPhaseTimeout — but never at or above bundleTimeout.
 func pickPhaseTimeout(override, bundleTimeout time.Duration, fraction float64) time.Duration {
 	if override > 0 {
 		return override
 	}
-	if derived := time.Duration(float64(bundleTimeout) * fraction); derived > minPhaseTimeout {
-		return derived
+	derived := time.Duration(float64(bundleTimeout) * fraction)
+	// Floor tiny derived values so normal latency doesn't trip the phase
+	// timeout on a modestly small budget.
+	if derived < minPhaseTimeout {
+		derived = minPhaseTimeout
 	}
-	return minPhaseTimeout
+	// Hard invariant: a phase timeout must stay strictly below the attempt
+	// budget, otherwise the attempt's context deadline always fires first and
+	// the phase timeout is inert. This only binds for a pathologically small
+	// bundleTimeout (at or below the floor); there the floor yields to the
+	// fractional value, which is always < bundleTimeout because fraction < 1.
+	if derived >= bundleTimeout {
+		derived = time.Duration(float64(bundleTimeout) * fraction)
+	}
+	return derived
+}
+
+// newRegistryDialer builds the dialer used by the registry transport, carrying
+// the resolved per-attempt dial timeout. It is a separate function so the dial
+// timeout is unit-testable: an http.Transport's DialContext is an opaque closure
+// whose timeout cannot be read back off the transport.
+func newRegistryDialer(timeout time.Duration) *net.Dialer {
+	return &net.Dialer{
+		Timeout:   timeout,
+		KeepAlive: 30 * time.Second,
+	}
 }
 
 // newRegistryTransport returns an http.Transport based on go-containerregistry's
@@ -111,10 +134,7 @@ func pickPhaseTimeout(override, bundleTimeout time.Duration, fraction float64) t
 func newRegistryTransport() *http.Transport {
 	dial, tlsHandshake, responseHeader := resolveTransportTimeouts(Timeout)
 	t := remote.DefaultTransport.(*http.Transport).Clone()
-	t.DialContext = (&net.Dialer{
-		Timeout:   dial,
-		KeepAlive: 30 * time.Second,
-	}).DialContext
+	t.DialContext = newRegistryDialer(dial).DialContext
 	t.TLSHandshakeTimeout = tlsHandshake
 	t.ResponseHeaderTimeout = responseHeader
 	return t
