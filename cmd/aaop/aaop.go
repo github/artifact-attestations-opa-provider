@@ -205,9 +205,12 @@ func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration,
 		return errors.New("bundle-delay must not be negative")
 	}
 	// The registry connection-phase timeouts are overrides: 0 means "derive
-	// from bundle-timeout". A positive override must fall inside the per-attempt
-	// budget — a phase timeout >= bundle-timeout can never fire before the
-	// attempt's context deadline, so it would silently never take effect.
+	// from bundle-timeout". Only negative values are rejected. An override may
+	// exceed bundle-timeout — consistent with the derived 250ms floor, we let an
+	// operator keep a usable connection-setup timeout even when it is larger
+	// than the per-attempt budget (the attempt context simply fires first).
+	// Setting a per-attempt budget that small is treated as operator error, not
+	// something to guard against here.
 	for _, o := range []struct {
 		name  string
 		value time.Duration
@@ -218,9 +221,6 @@ func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration,
 	} {
 		if o.value < 0 {
 			return fmt.Errorf("%s must not be negative", o.name)
-		}
-		if o.value > 0 && o.value >= timeout {
-			return fmt.Errorf("%s must be less than bundle-timeout (%s)", o.name, timeout)
 		}
 	}
 

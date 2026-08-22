@@ -60,6 +60,29 @@ func TestConfigureBundleFetcherHonorsTransportOverrides(t *testing.T) {
 	assert.Equal(t, 3*time.Second, fetcher.ResponseHeaderTimeoutOverride)
 }
 
+func TestConfigureBundleFetcherAllowsOverrideAboveBudget(t *testing.T) {
+	originalTimeout := fetcher.Timeout
+	originalDial := fetcher.DialTimeoutOverride
+	originalTLS := fetcher.TLSHandshakeTimeoutOverride
+	originalResponseHeader := fetcher.ResponseHeaderTimeoutOverride
+	t.Cleanup(func() {
+		fetcher.Timeout = originalTimeout
+		fetcher.DialTimeoutOverride = originalDial
+		fetcher.TLSHandshakeTimeoutOverride = originalTLS
+		fetcher.ResponseHeaderTimeoutOverride = originalResponseHeader
+		fetcher.ConfigureTransport()
+	})
+
+	// An override larger than bundle-timeout is accepted: like the derived
+	// 250ms floor, an operator may keep a usable connection-setup timeout even
+	// when it exceeds the per-attempt budget. Only negative values are rejected.
+	err := configureBundleFetcher(3, 1*time.Second, 0,
+		5*time.Second, 0, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Second, fetcher.DialTimeoutOverride)
+}
+
 func TestConfigureBundleFetcherRejectsInvalidValues(t *testing.T) {
 	tests := []struct {
 		name                  string
@@ -102,20 +125,6 @@ func TestConfigureBundleFetcherRejectsInvalidValues(t *testing.T) {
 			timeout:     time.Second,
 			dialTimeout: -time.Millisecond,
 			errorText:   "registry-dial-timeout must not be negative",
-		},
-		{
-			name:                "tls override at least bundle-timeout",
-			maxAttempts:         1,
-			timeout:             2 * time.Second,
-			tlsHandshakeTimeout: 2 * time.Second,
-			errorText:           "registry-tls-handshake-timeout must be less than bundle-timeout (2s)",
-		},
-		{
-			name:                  "response-header override exceeds bundle-timeout",
-			maxAttempts:           1,
-			timeout:               2 * time.Second,
-			responseHeaderTimeout: 3 * time.Second,
-			errorText:             "registry-response-header-timeout must be less than bundle-timeout (2s)",
 		},
 	}
 
