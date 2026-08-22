@@ -285,3 +285,90 @@ func TestRetryBundleStopsOnNotFound(t *testing.T) {
 	assert.Equal(t, 1, attempts, "a 404 must not be retried")
 	assert.Equal(t, 1, fe.Attempts)
 }
+
+func TestResolveTransportTimeoutsDerivesFromBudget(t *testing.T) {
+	// With no overrides, each phase is a fraction of the per-attempt budget.
+	// At a 2.5s budget this reproduces the values this change originally
+	// shipped as constants (dial 1.5s, TLS 1.5s, response-header 2s), so the
+	// derivation is a generalization of that calibration, not a behavior change
+	// for the deploying environment.
+	dial, tlsHandshake, responseHeader := resolveTransportTimeouts(2500 * time.Millisecond)
+	assert.Equal(t, 1500*time.Millisecond, dial)
+	assert.Equal(t, 1500*time.Millisecond, tlsHandshake)
+	assert.Equal(t, 2000*time.Millisecond, responseHeader)
+
+	// Every derived phase must stay strictly under the budget so a stall is
+	// abandoned before the attempt's context deadline.
+	assert.Less(t, dial, 2500*time.Millisecond)
+	assert.Less(t, tlsHandshake, 2500*time.Millisecond)
+	assert.Less(t, responseHeader, 2500*time.Millisecond)
+}
+
+func TestResolveTransportTimeoutsHonorsOverrides(t *testing.T) {
+	defer restoreTransportOverrides(DialTimeoutOverride, TLSHandshakeTimeoutOverride, ResponseHeaderTimeoutOverride)
+
+	DialTimeoutOverride = 400 * time.Millisecond
+	TLSHandshakeTimeoutOverride = 0 // still derived
+	ResponseHeaderTimeoutOverride = 900 * time.Millisecond
+
+	dial, tlsHandshake, responseHeader := resolveTransportTimeouts(2 * time.Second)
+	assert.Equal(t, 400*time.Millisecond, dial, "positive override used verbatim")
+	assert.Equal(t, 1200*time.Millisecond, tlsHandshake, "zero override derives from budget")
+	assert.Equal(t, 900*time.Millisecond, responseHeader, "positive override used verbatim")
+}
+
+func TestResolveTransportTimeoutsFloorsTinyBudget(t *testing.T) {
+	// A very small budget must not yield sub-100ms phase timeouts.
+	dial, tlsHandshake, responseHeader := resolveTransportTimeouts(100 * time.Millisecond)
+	assert.Equal(t, minPhaseTimeout, dial)
+	assert.Equal(t, minPhaseTimeout, tlsHandshake)
+	assert.Equal(t, minPhaseTimeout, responseHeader)
+}
+
+func TestNewRegistryTransportUsesResolvedTimeouts(t *testing.T) {
+	defer restoreTransportOverrides(DialTimeoutOverride, TLSHandshakeTimeoutOverride, ResponseHeaderTimeoutOverride)
+	DialTimeoutOverride, TLSHandshakeTimeoutOverride, ResponseHeaderTimeoutOverride = 0, 0, 0
+
+	tr := newRegistryTransport()
+
+	_, wantTLS, wantResponseHeader := resolveTransportTimeouts(Timeout)
+	assert.Equal(t, wantTLS, tr.TLSHandshakeTimeout)
+	assert.Equal(t, wantResponseHeader, tr.ResponseHeaderTimeout)
+
+	// Cloning the default transport must preserve its connection-pool tuning
+	// rather than resetting to the net/http zero values.
+	assert.Equal(t, 100, tr.MaxIdleConns)
+	assert.Equal(t, 50, tr.MaxIdleConnsPerHost)
+	assert.True(t, tr.ForceAttemptHTTP2)
+	require.NotNil(t, tr.DialContext)
+}
+
+func TestConfigureTransportRebuildsForCurrentTimeout(t *testing.T) {
+	originalTimeout := Timeout
+	originalTransport := registryTransport
+	defer func() {
+		Timeout = originalTimeout
+		registryTransport = originalTransport
+	}()
+
+	Timeout = 4 * time.Second
+	ConfigureTransport()
+
+	_, wantTLS, wantResponseHeader := resolveTransportTimeouts(4 * time.Second)
+	require.NotNil(t, registryTransport)
+	assert.Equal(t, wantTLS, registryTransport.TLSHandshakeTimeout)
+	assert.Equal(t, wantResponseHeader, registryTransport.ResponseHeaderTimeout)
+}
+
+func TestGetRemoteOptionsIncludesTunedTransport(t *testing.T) {
+	// GetRemoteOptions must reuse the shared, tuned transport singleton so the
+	// connection pool is shared across requests.
+	require.NotNil(t, registryTransport)
+	assert.NotEmpty(t, GetRemoteOptions(nil))
+}
+
+func restoreTransportOverrides(dial, tlsHandshake, responseHeader time.Duration) {
+	DialTimeoutOverride = dial
+	TLSHandshakeTimeoutOverride = tlsHandshake
+	ResponseHeaderTimeoutOverride = responseHeader
+}

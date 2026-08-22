@@ -45,7 +45,12 @@ var (
 	bundleMaxAttempts = flag.Int("bundle-max-attempts", 3, "max attempts to fetch a bundle")
 	bundleTimeout     = flag.Duration("bundle-timeout", 3*time.Second, "timeout for a single attempt to fetch a bundle")
 	bundleDelay       = flag.Duration("bundle-delay", 0, "delay between attempts to fetch a bundle")
-	updateCABundle    = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
+
+	registryDialTimeout           = flag.Duration("registry-dial-timeout", 0, "override TCP dial timeout to the registry; 0 derives it from bundle-timeout")
+	registryTLSHandshakeTimeout   = flag.Duration("registry-tls-handshake-timeout", 0, "override TLS handshake timeout to the registry; 0 derives it from bundle-timeout")
+	registryResponseHeaderTimeout = flag.Duration("registry-response-header-timeout", 0, "override wait for the registry's response headers; 0 derives it from bundle-timeout")
+
+	updateCABundle = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
 )
 
 const (
@@ -69,7 +74,8 @@ func main() {
 	var err error
 
 	flag.Parse()
-	if err := configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay); err != nil {
+	if err := configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay,
+		*registryDialTimeout, *registryTLSHandshakeTimeout, *registryResponseHeaderTimeout); err != nil {
 		log.Fatal(err)
 	}
 
@@ -187,7 +193,8 @@ func main() {
 	slog.Info("server shut down gracefully")
 }
 
-func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration) error {
+func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration,
+	dialTimeout, tlsHandshakeTimeout, responseHeaderTimeout time.Duration) error {
 	if maxAttempts < 1 {
 		return errors.New("bundle-max-attempts must be greater than zero")
 	}
@@ -197,10 +204,35 @@ func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration) error
 	if delay < 0 {
 		return errors.New("bundle-delay must not be negative")
 	}
+	// The registry connection-phase timeouts are overrides: 0 means "derive
+	// from bundle-timeout". A positive override must fall inside the per-attempt
+	// budget — a phase timeout >= bundle-timeout can never fire before the
+	// attempt's context deadline, so it would silently never take effect.
+	for _, o := range []struct {
+		name  string
+		value time.Duration
+	}{
+		{"registry-dial-timeout", dialTimeout},
+		{"registry-tls-handshake-timeout", tlsHandshakeTimeout},
+		{"registry-response-header-timeout", responseHeaderTimeout},
+	} {
+		if o.value < 0 {
+			return fmt.Errorf("%s must not be negative", o.name)
+		}
+		if o.value > 0 && o.value >= timeout {
+			return fmt.Errorf("%s must be less than bundle-timeout (%s)", o.name, timeout)
+		}
+	}
 
 	fetcher.MaxAttempts = maxAttempts
 	fetcher.Timeout = timeout
 	fetcher.Delay = delay
+	fetcher.DialTimeoutOverride = dialTimeout
+	fetcher.TLSHandshakeTimeoutOverride = tlsHandshakeTimeout
+	fetcher.ResponseHeaderTimeoutOverride = responseHeaderTimeout
+	// Rebuild the shared registry transport now that Timeout and the overrides
+	// are set, so its connection-phase timeouts track the per-attempt budget.
+	fetcher.ConfigureTransport()
 	return nil
 }
 

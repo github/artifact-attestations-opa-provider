@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime"
 	"strings"
@@ -31,7 +32,93 @@ var (
 	Timeout = time.Second * 3
 	// Delay between attempts to fetch bundles.
 	Delay = time.Duration(0)
+	// DialTimeoutOverride, TLSHandshakeTimeoutOverride, and
+	// ResponseHeaderTimeoutOverride optionally pin the corresponding registry
+	// connection-phase timeout. Zero (the default) means "derive from Timeout"
+	// via resolveTransportTimeouts; a positive value is used verbatim. They let
+	// an operator with an unusual registry or forward proxy override a single
+	// phase without restating the whole per-attempt budget.
+	DialTimeoutOverride           = time.Duration(0)
+	TLSHandshakeTimeoutOverride   = time.Duration(0)
+	ResponseHeaderTimeoutOverride = time.Duration(0)
 )
+
+// Registry connection-phase timeouts are a decomposition of the per-attempt
+// fetch budget (Timeout), not independently chosen constants: go-containerregistry's
+// stock transport uses a 30s dial and 10s TLS-handshake timeout — both longer
+// than a typical fetch attempt — so a request routed (via the registry's global
+// endpoint) to a degraded geo-replica can burn the whole deadline in connection
+// setup and be cancelled without ever retrying against a healthy replica. Each
+// phase is instead bounded below Timeout so a stall is abandoned early, leaving
+// parent (gatekeeper / admission-webhook) budget for retryBundle to open a
+// fresh connection. Deriving from Timeout keeps the provider correct by default
+// at any -bundle-timeout rather than baking in values tuned for one deployment.
+const (
+	// dialTimeoutFraction and tlsHandshakeTimeoutFraction bound the two
+	// sequential phases of connection establishment; responseHeaderTimeoutFraction
+	// bounds the wait for the first response byte after the request is written.
+	dialTimeoutFraction           = 0.6
+	tlsHandshakeTimeoutFraction   = 0.6
+	responseHeaderTimeoutFraction = 0.8
+	// minPhaseTimeout floors every derived phase so a very small -bundle-timeout
+	// cannot produce sub-100ms timeouts that trip on normal network latency.
+	minPhaseTimeout = 250 * time.Millisecond
+)
+
+// registryTransport is the shared HTTP transport used for all registry access.
+// It is created once so the underlying connection pool is reused across
+// requests (creating a transport per request would defeat pooling). It is
+// rebuilt by ConfigureTransport once flags are parsed; until then it reflects
+// the default Timeout.
+var registryTransport = newRegistryTransport()
+
+// ConfigureTransport rebuilds the shared registry transport from the current
+// Timeout and phase overrides. Call it once at startup after Timeout and the
+// *Override vars are set (e.g. from flags). It reassigns a package-level var and
+// is not safe to call concurrently with in-flight registry fetches.
+func ConfigureTransport() {
+	registryTransport = newRegistryTransport()
+}
+
+// resolveTransportTimeouts returns the effective dial, TLS-handshake, and
+// response-header timeouts for a per-attempt budget of bundleTimeout. A positive
+// *Override is honored verbatim; a zero override derives that phase as a
+// fraction of bundleTimeout, floored at minPhaseTimeout.
+func resolveTransportTimeouts(bundleTimeout time.Duration) (dial, tlsHandshake, responseHeader time.Duration) {
+	dial = pickPhaseTimeout(DialTimeoutOverride, bundleTimeout, dialTimeoutFraction)
+	tlsHandshake = pickPhaseTimeout(TLSHandshakeTimeoutOverride, bundleTimeout, tlsHandshakeTimeoutFraction)
+	responseHeader = pickPhaseTimeout(ResponseHeaderTimeoutOverride, bundleTimeout, responseHeaderTimeoutFraction)
+	return
+}
+
+// pickPhaseTimeout returns override when positive, otherwise fraction*bundleTimeout
+// floored at minPhaseTimeout.
+func pickPhaseTimeout(override, bundleTimeout time.Duration, fraction float64) time.Duration {
+	if override > 0 {
+		return override
+	}
+	if derived := time.Duration(float64(bundleTimeout) * fraction); derived > minPhaseTimeout {
+		return derived
+	}
+	return minPhaseTimeout
+}
+
+// newRegistryTransport returns an http.Transport based on go-containerregistry's
+// DefaultTransport but with the connection-establishment timeouts resolved from
+// the current per-attempt budget (see resolveTransportTimeouts). Cloning the
+// default preserves the other tuned fields (idle-connection pool sizes, HTTP/2,
+// proxy) while overriding only the timeouts.
+func newRegistryTransport() *http.Transport {
+	dial, tlsHandshake, responseHeader := resolveTransportTimeouts(Timeout)
+	t := remote.DefaultTransport.(*http.Transport).Clone()
+	t.DialContext = (&net.Dialer{
+		Timeout:   dial,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	t.TLSHandshakeTimeout = tlsHandshake
+	t.ResponseHeaderTimeout = responseHeader
+	return t
+}
 
 // FailureKind is a stable, low-cardinality classification of why a bundle
 // fetch failed. It is safe to use as a metric label value and a log field.
@@ -396,6 +483,7 @@ func GetRemoteOptions(kc authn.Keychain) []remote.Option {
 	var opts = []remote.Option{
 		remote.WithUserAgent(UserAgentString),
 		remote.WithAuthFromKeychain(kc),
+		remote.WithTransport(registryTransport),
 	}
 
 	return opts
