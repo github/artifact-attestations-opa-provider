@@ -64,8 +64,11 @@ const (
 	dialTimeoutFraction           = 0.6
 	tlsHandshakeTimeoutFraction   = 0.6
 	responseHeaderTimeoutFraction = 0.8
-	// minPhaseTimeout floors every derived phase so a very small -bundle-timeout
-	// cannot produce sub-100ms timeouts that trip on normal network latency.
+	// minPhaseTimeout is a hard floor on every derived phase timeout. Below
+	// ~250ms the dial and TLS-handshake phases start tripping on normal network
+	// latency, turning a healthy-but-not-instant connection into a spurious
+	// failure. The floor is applied even when it exceeds a very small
+	// -bundle-timeout (see pickPhaseTimeout).
 	minPhaseTimeout = 250 * time.Millisecond
 )
 
@@ -87,8 +90,8 @@ func ConfigureTransport() {
 // resolveTransportTimeouts returns the effective dial, TLS-handshake, and
 // response-header timeouts for a per-attempt budget of bundleTimeout. A positive
 // *Override is honored verbatim; a zero override derives that phase as a
-// fraction of bundleTimeout, floored at minPhaseTimeout but always kept strictly
-// below bundleTimeout.
+// fraction of bundleTimeout, floored at minPhaseTimeout (see pickPhaseTimeout —
+// for a bundleTimeout below the floor the returned value can exceed it).
 func resolveTransportTimeouts(bundleTimeout time.Duration) (dial, tlsHandshake, responseHeader time.Duration) {
 	dial = pickPhaseTimeout(DialTimeoutOverride, bundleTimeout, dialTimeoutFraction)
 	tlsHandshake = pickPhaseTimeout(TLSHandshakeTimeoutOverride, bundleTimeout, tlsHandshakeTimeoutFraction)
@@ -97,24 +100,24 @@ func resolveTransportTimeouts(bundleTimeout time.Duration) (dial, tlsHandshake, 
 }
 
 // pickPhaseTimeout returns override when positive, otherwise fraction*bundleTimeout
-// floored at minPhaseTimeout — but never at or above bundleTimeout.
+// floored at minPhaseTimeout (which may exceed bundleTimeout for a very small
+// budget — see the note inside).
 func pickPhaseTimeout(override, bundleTimeout time.Duration, fraction float64) time.Duration {
 	if override > 0 {
 		return override
 	}
 	derived := time.Duration(float64(bundleTimeout) * fraction)
-	// Floor tiny derived values so normal latency doesn't trip the phase
-	// timeout on a modestly small budget.
+	// Apply a hard floor. We deliberately keep it even when it exceeds
+	// bundleTimeout: shrinking a dial or TLS-handshake timeout to a few
+	// milliseconds to fit a tiny per-attempt budget would just trade a slow
+	// fetch for a guaranteed connection failure on normal latency. A
+	// -bundle-timeout below the floor cannot fetch a bundle over TLS from a
+	// real registry no matter how we size these phases, so in that (already
+	// broken) configuration we keep a usable floor and let the attempt context
+	// win — rather than derive an unusable sub-250ms timeout. This means a
+	// phase timeout CAN be larger than bundleTimeout; that is intended.
 	if derived < minPhaseTimeout {
 		derived = minPhaseTimeout
-	}
-	// Hard invariant: a phase timeout must stay strictly below the attempt
-	// budget, otherwise the attempt's context deadline always fires first and
-	// the phase timeout is inert. This only binds for a pathologically small
-	// bundleTimeout (at or below the floor); there the floor yields to the
-	// fractional value, which is always < bundleTimeout because fraction < 1.
-	if derived >= bundleTimeout {
-		derived = time.Duration(float64(bundleTimeout) * fraction)
 	}
 	return derived
 }

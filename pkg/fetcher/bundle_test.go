@@ -329,19 +329,17 @@ func TestResolveTransportTimeoutsFloorsSmallBudget(t *testing.T) {
 	assert.Less(t, dial, 300*time.Millisecond)
 }
 
-func TestResolveTransportTimeoutsKeepsPhasesBelowTinyBudget(t *testing.T) {
-	// For a pathologically small budget the floor would meet or exceed the
-	// attempt budget, so the hard invariant wins: each phase falls back to its
-	// fractional value and stays strictly below the budget (a phase timeout at
-	// or above the attempt deadline could never fire first).
+func TestResolveTransportTimeoutsAppliesHardFloorBelowBudget(t *testing.T) {
+	// For a pathologically small budget the 250ms floor intentionally wins even
+	// though it exceeds the budget: we keep a usable dial/handshake floor rather
+	// than derive an unusable sub-10ms timeout. The attempt context simply fires
+	// first in this already-broken configuration.
 	const budget = 100 * time.Millisecond
 	dial, tlsHandshake, responseHeader := resolveTransportTimeouts(budget)
-	assert.Equal(t, 60*time.Millisecond, dial)
-	assert.Equal(t, 60*time.Millisecond, tlsHandshake)
-	assert.Equal(t, 80*time.Millisecond, responseHeader)
-	assert.Less(t, dial, budget)
-	assert.Less(t, tlsHandshake, budget)
-	assert.Less(t, responseHeader, budget)
+	assert.Equal(t, minPhaseTimeout, dial)
+	assert.Equal(t, minPhaseTimeout, tlsHandshake)
+	assert.Equal(t, minPhaseTimeout, responseHeader)
+	assert.Greater(t, dial, budget, "the floor is kept even when it exceeds the budget")
 }
 
 func TestNewRegistryDialerUsesResolvedTimeout(t *testing.T) {
