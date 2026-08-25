@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -422,4 +424,137 @@ func restoreTransportOverrides(dial, tlsHandshake, responseHeader time.Duration)
 	DialTimeoutOverride = dial
 	TLSHandshakeTimeoutOverride = tlsHandshake
 	ResponseHeaderTimeoutOverride = responseHeader
+}
+
+// roundTripFunc adapts a function to http.RoundTripper so deadlineRoundTripper
+// can be driven with a scripted base transport.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+// blockingBody blocks on Read until its context is done, then returns the
+// context error. It simulates a response body that stalls mid-read so tests can
+// prove the overall request wall covers body reads, not just the header wait.
+type blockingBody struct {
+	ctx context.Context
+}
+
+func (b blockingBody) Read([]byte) (int, error) {
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+
+func (blockingBody) Close() error {
+	return nil
+}
+
+func newTestRequest(t *testing.T) *http.Request {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.test", http.NoBody)
+	require.NoError(t, err)
+
+	return req
+}
+
+func TestDeadlineRoundTripperTimesOutBeforeResponse(t *testing.T) {
+	rt := deadlineRoundTripper{
+		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			<-req.Context().Done()
+			return nil, req.Context().Err()
+		}),
+		timeout: 20 * time.Millisecond,
+	}
+
+	start := time.Now()
+	resp, err := rt.RoundTrip(newTestRequest(t))
+	elapsed := time.Since(start)
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, elapsed, 2*time.Second, "RoundTrip must abort at ~timeout, not hang")
+}
+
+func TestDeadlineRoundTripperBoundsBodyRead(t *testing.T) {
+	rt := deadlineRoundTripper{
+		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			// Headers return immediately; the body then stalls. Only a wall that
+			// covers the body (not just the header wait) can break this.
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       blockingBody{ctx: req.Context()},
+			}, nil
+		}),
+		timeout: 20 * time.Millisecond,
+	}
+
+	resp, err := rt.RoundTrip(newTestRequest(t))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	_, readErr := io.ReadAll(resp.Body)
+	require.ErrorIs(t, readErr, context.DeadlineExceeded, "the deadline must fire during the body read")
+}
+
+func TestDeadlineRoundTripperPassesThroughAndCancelsOnClose(t *testing.T) {
+	var capturedCtx context.Context
+
+	rt := deadlineRoundTripper{
+		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			capturedCtx = req.Context()
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("hello")),
+			}, nil
+		}),
+		timeout: time.Minute,
+	}
+
+	resp, err := rt.RoundTrip(newTestRequest(t))
+	require.NoError(t, err)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(body))
+	require.NoError(t, capturedCtx.Err(), "the deadline must stay armed while the body is read")
+
+	closeErr := resp.Body.Close()
+	require.NoError(t, closeErr)
+	assert.ErrorIs(t, capturedCtx.Err(), context.Canceled, "closing the body must release the deadline")
+}
+
+func TestDeadlineRoundTripperDisabledPassesResponseUnwrapped(t *testing.T) {
+	want := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}
+	rt := deadlineRoundTripper{
+		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return want, nil
+		}),
+		timeout: 0,
+	}
+
+	resp, err := rt.RoundTrip(newTestRequest(t))
+
+	require.NoError(t, err)
+	assert.Same(t, want, resp, "a non-positive timeout must be a pure passthrough")
+	_, wrapped := resp.Body.(*cancelOnCloseBody)
+	assert.False(t, wrapped, "the body must not be wrapped when the wall is disabled")
+	resp.Body.Close()
+}
+
+func TestResolveRequestTimeout(t *testing.T) {
+	origOverride, origTimeout := RequestTimeoutOverride, Timeout
+	t.Cleanup(func() {
+		RequestTimeoutOverride, Timeout = origOverride, origTimeout
+	})
+
+	Timeout = 4 * time.Second
+	RequestTimeoutOverride = 0
+	assert.Equal(t, 4*time.Second, resolveRequestTimeout(), "zero override derives from Timeout")
+
+	RequestTimeoutOverride = 9 * time.Second
+	assert.Equal(t, 9*time.Second, resolveRequestTimeout(), "positive override used verbatim")
 }

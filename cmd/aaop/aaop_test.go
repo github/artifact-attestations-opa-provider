@@ -9,25 +9,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestConfigureBundleFetcher(t *testing.T) {
-	originalMaxAttempts := fetcher.MaxAttempts
-	originalTimeout := fetcher.Timeout
-	originalDelay := fetcher.Delay
-	originalDial := fetcher.DialTimeoutOverride
-	originalTLS := fetcher.TLSHandshakeTimeoutOverride
-	originalResponseHeader := fetcher.ResponseHeaderTimeoutOverride
+// restoreFetcherConfig snapshots every fetcher tunable configureBundleFetcher
+// mutates and restores it (plus the shared transport) after the test, so cases
+// that set overrides do not leak into later tests.
+func restoreFetcherConfig(t *testing.T) {
+	t.Helper()
+
+	maxAttempts := fetcher.MaxAttempts
+	timeout := fetcher.Timeout
+	delay := fetcher.Delay
+	dial := fetcher.DialTimeoutOverride
+	tlsHandshake := fetcher.TLSHandshakeTimeoutOverride
+	responseHeader := fetcher.ResponseHeaderTimeoutOverride
+	request := fetcher.RequestTimeoutOverride
 	t.Cleanup(func() {
-		fetcher.MaxAttempts = originalMaxAttempts
-		fetcher.Timeout = originalTimeout
-		fetcher.Delay = originalDelay
-		fetcher.DialTimeoutOverride = originalDial
-		fetcher.TLSHandshakeTimeoutOverride = originalTLS
-		fetcher.ResponseHeaderTimeoutOverride = originalResponseHeader
+		fetcher.MaxAttempts = maxAttempts
+		fetcher.Timeout = timeout
+		fetcher.Delay = delay
+		fetcher.DialTimeoutOverride = dial
+		fetcher.TLSHandshakeTimeoutOverride = tlsHandshake
+		fetcher.ResponseHeaderTimeoutOverride = responseHeader
+		fetcher.RequestTimeoutOverride = request
 		fetcher.ConfigureTransport()
 	})
+}
 
-	// Zero overrides: phase timeouts are derived from bundle-timeout.
-	err := configureBundleFetcher(5, 750*time.Millisecond, 25*time.Millisecond, 0, 0, 0)
+func TestConfigureBundleFetcher(t *testing.T) {
+	restoreFetcherConfig(t)
+
+	// Zero overrides: connection-phase timeouts derive from bundle-timeout and
+	// the overall request wall is derived too.
+	err := configureBundleFetcher(5, 750*time.Millisecond, 25*time.Millisecond, registryTimeouts{})
 
 	require.NoError(t, err)
 	assert.Equal(t, 5, fetcher.MaxAttempts)
@@ -36,63 +48,48 @@ func TestConfigureBundleFetcher(t *testing.T) {
 	assert.Zero(t, fetcher.DialTimeoutOverride)
 	assert.Zero(t, fetcher.TLSHandshakeTimeoutOverride)
 	assert.Zero(t, fetcher.ResponseHeaderTimeoutOverride)
+	assert.Zero(t, fetcher.RequestTimeoutOverride)
 }
 
 func TestConfigureBundleFetcherHonorsTransportOverrides(t *testing.T) {
-	originalTimeout := fetcher.Timeout
-	originalDial := fetcher.DialTimeoutOverride
-	originalTLS := fetcher.TLSHandshakeTimeoutOverride
-	originalResponseHeader := fetcher.ResponseHeaderTimeoutOverride
-	t.Cleanup(func() {
-		fetcher.Timeout = originalTimeout
-		fetcher.DialTimeoutOverride = originalDial
-		fetcher.TLSHandshakeTimeoutOverride = originalTLS
-		fetcher.ResponseHeaderTimeoutOverride = originalResponseHeader
-		fetcher.ConfigureTransport()
-	})
+	restoreFetcherConfig(t)
 
-	err := configureBundleFetcher(3, 5*time.Second, 0,
-		1*time.Second, 2*time.Second, 3*time.Second)
+	err := configureBundleFetcher(3, 5*time.Second, 0, registryTimeouts{
+		dial:           1 * time.Second,
+		tlsHandshake:   2 * time.Second,
+		responseHeader: 3 * time.Second,
+		request:        8 * time.Second,
+	})
 
 	require.NoError(t, err)
 	assert.Equal(t, 1*time.Second, fetcher.DialTimeoutOverride)
 	assert.Equal(t, 2*time.Second, fetcher.TLSHandshakeTimeoutOverride)
 	assert.Equal(t, 3*time.Second, fetcher.ResponseHeaderTimeoutOverride)
+	assert.Equal(t, 8*time.Second, fetcher.RequestTimeoutOverride)
 }
 
 func TestConfigureBundleFetcherAllowsOverrideAboveBudget(t *testing.T) {
-	originalTimeout := fetcher.Timeout
-	originalDial := fetcher.DialTimeoutOverride
-	originalTLS := fetcher.TLSHandshakeTimeoutOverride
-	originalResponseHeader := fetcher.ResponseHeaderTimeoutOverride
-	t.Cleanup(func() {
-		fetcher.Timeout = originalTimeout
-		fetcher.DialTimeoutOverride = originalDial
-		fetcher.TLSHandshakeTimeoutOverride = originalTLS
-		fetcher.ResponseHeaderTimeoutOverride = originalResponseHeader
-		fetcher.ConfigureTransport()
-	})
+	restoreFetcherConfig(t)
 
 	// An override larger than bundle-timeout is accepted: like the derived
 	// 250ms floor, an operator may keep a usable connection-setup timeout even
 	// when it exceeds the per-attempt budget. Only negative values are rejected.
-	err := configureBundleFetcher(3, 1*time.Second, 0,
-		5*time.Second, 0, 0)
+	err := configureBundleFetcher(3, 1*time.Second, 0, registryTimeouts{dial: 5 * time.Second})
 
 	require.NoError(t, err)
 	assert.Equal(t, 5*time.Second, fetcher.DialTimeoutOverride)
 }
 
 func TestConfigureBundleFetcherRejectsInvalidValues(t *testing.T) {
+	restoreFetcherConfig(t)
+
 	tests := []struct {
-		name                  string
-		maxAttempts           int
-		timeout               time.Duration
-		delay                 time.Duration
-		dialTimeout           time.Duration
-		tlsHandshakeTimeout   time.Duration
-		responseHeaderTimeout time.Duration
-		errorText             string
+		name        string
+		maxAttempts int
+		timeout     time.Duration
+		delay       time.Duration
+		timeouts    registryTimeouts
+		errorText   string
 	}{
 		{
 			name:        "zero attempts",
@@ -123,8 +120,15 @@ func TestConfigureBundleFetcherRejectsInvalidValues(t *testing.T) {
 			name:        "negative dial timeout",
 			maxAttempts: 1,
 			timeout:     time.Second,
-			dialTimeout: -time.Millisecond,
+			timeouts:    registryTimeouts{dial: -time.Millisecond},
 			errorText:   "registry-dial-timeout must not be negative",
+		},
+		{
+			name:        "negative request timeout",
+			maxAttempts: 1,
+			timeout:     time.Second,
+			timeouts:    registryTimeouts{request: -time.Millisecond},
+			errorText:   "registry-request-timeout must not be negative",
 		},
 	}
 
@@ -134,8 +138,7 @@ func TestConfigureBundleFetcherRejectsInvalidValues(t *testing.T) {
 			fetcher.Timeout = 9 * time.Second
 			fetcher.Delay = 9 * time.Millisecond
 
-			err := configureBundleFetcher(test.maxAttempts, test.timeout, test.delay,
-				test.dialTimeout, test.tlsHandshakeTimeout, test.responseHeaderTimeout)
+			err := configureBundleFetcher(test.maxAttempts, test.timeout, test.delay, test.timeouts)
 
 			require.EqualError(t, err, test.errorText)
 			assert.Equal(t, 9, fetcher.MaxAttempts)

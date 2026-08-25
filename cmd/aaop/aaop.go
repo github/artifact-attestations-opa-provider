@@ -50,6 +50,8 @@ var (
 	registryTLSHandshakeTimeout   = flag.Duration("registry-tls-handshake-timeout", 0, "override TLS handshake timeout to the registry; 0 derives it from bundle-timeout")
 	registryResponseHeaderTimeout = flag.Duration("registry-response-header-timeout", 0, "override wait for the registry's response headers; 0 derives it from bundle-timeout")
 
+	registryRequestTimeout = flag.Duration("registry-request-timeout", 0, "overall wall for a single registry HTTP request incl. body; 0 derives it from bundle-timeout")
+
 	updateCABundle = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
 )
 
@@ -74,8 +76,12 @@ func main() {
 	var err error
 
 	flag.Parse()
-	if err := configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay,
-		*registryDialTimeout, *registryTLSHandshakeTimeout, *registryResponseHeaderTimeout); err != nil {
+	if err := configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay, registryTimeouts{
+		dial:           *registryDialTimeout,
+		tlsHandshake:   *registryTLSHandshakeTimeout,
+		responseHeader: *registryResponseHeaderTimeout,
+		request:        *registryRequestTimeout,
+	}); err != nil {
 		log.Fatal(err)
 	}
 
@@ -193,8 +199,19 @@ func main() {
 	slog.Info("server shut down gracefully")
 }
 
-func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration,
-	dialTimeout, tlsHandshakeTimeout, responseHeaderTimeout time.Duration) error {
+// registryTimeouts groups the optional registry HTTP transport timeout
+// overrides passed to configureBundleFetcher. Every field is "0 = derive from
+// bundle-timeout / use default"; only negative values are rejected. They are
+// grouped into a struct so new transport knobs can be added without pushing
+// configureBundleFetcher past the argument-count limit enforced by the linter.
+type registryTimeouts struct {
+	dial           time.Duration
+	tlsHandshake   time.Duration
+	responseHeader time.Duration
+	request        time.Duration
+}
+
+func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration, rt registryTimeouts) error {
 	if maxAttempts < 1 {
 		return errors.New("bundle-max-attempts must be greater than zero")
 	}
@@ -204,9 +221,9 @@ func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration,
 	if delay < 0 {
 		return errors.New("bundle-delay must not be negative")
 	}
-	// The registry connection-phase timeouts are overrides: 0 means "derive
-	// from bundle-timeout". Only negative values are rejected. An override may
-	// exceed bundle-timeout — consistent with the derived 250ms floor, we let an
+	// The registry transport timeouts are overrides: 0 means "derive from
+	// bundle-timeout". Only negative values are rejected. An override may exceed
+	// bundle-timeout — consistent with the derived 250ms floor, we let an
 	// operator keep a usable connection-setup timeout even when it is larger
 	// than the per-attempt budget (the attempt context simply fires first).
 	// Setting a per-attempt budget that small is treated as operator error, not
@@ -215,9 +232,10 @@ func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration,
 		name  string
 		value time.Duration
 	}{
-		{"registry-dial-timeout", dialTimeout},
-		{"registry-tls-handshake-timeout", tlsHandshakeTimeout},
-		{"registry-response-header-timeout", responseHeaderTimeout},
+		{"registry-dial-timeout", rt.dial},
+		{"registry-tls-handshake-timeout", rt.tlsHandshake},
+		{"registry-response-header-timeout", rt.responseHeader},
+		{"registry-request-timeout", rt.request},
 	} {
 		if o.value < 0 {
 			return fmt.Errorf("%s must not be negative", o.name)
@@ -227,9 +245,10 @@ func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration,
 	fetcher.MaxAttempts = maxAttempts
 	fetcher.Timeout = timeout
 	fetcher.Delay = delay
-	fetcher.DialTimeoutOverride = dialTimeout
-	fetcher.TLSHandshakeTimeoutOverride = tlsHandshakeTimeout
-	fetcher.ResponseHeaderTimeoutOverride = responseHeaderTimeout
+	fetcher.DialTimeoutOverride = rt.dial
+	fetcher.TLSHandshakeTimeoutOverride = rt.tlsHandshake
+	fetcher.ResponseHeaderTimeoutOverride = rt.responseHeader
+	fetcher.RequestTimeoutOverride = rt.request
 	// Rebuild the shared registry transport now that Timeout and the overrides
 	// are set, so its connection-phase timeouts track the per-attempt budget.
 	fetcher.ConfigureTransport()

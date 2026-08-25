@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -45,6 +46,14 @@ var (
 	// verbatim. The overrides let an operator with an unusual registry or
 	// forward proxy tune a single phase without restating the whole budget.
 	ResponseHeaderTimeoutOverride = time.Duration(0)
+
+	// RequestTimeoutOverride optionally pins the overall wall for a single
+	// registry HTTP request, covering connect, headers, and body. Zero derives
+	// it from Timeout (see resolveRequestTimeout); a positive value is used
+	// verbatim. It is a backstop that bounds any request phase the per-phase
+	// timeouts miss — most importantly a response body-read stall, which
+	// ResponseHeaderTimeout (header-only) does not cover.
+	RequestTimeoutOverride = time.Duration(0)
 )
 
 // Registry connection-phase timeouts are a decomposition of the per-attempt
@@ -145,6 +154,68 @@ func newRegistryTransport() *http.Transport {
 	t.TLSHandshakeTimeout = tlsHandshake
 	t.ResponseHeaderTimeout = responseHeader
 	return t
+}
+
+// resolveRequestTimeout returns the overall per-request wall: RequestTimeoutOverride
+// when positive, otherwise the per-attempt budget (Timeout). Bounding each HTTP
+// request by the per-attempt budget is a safe ceiling — it will not fire before
+// the attempt context under normal operation.
+func resolveRequestTimeout() time.Duration {
+	if RequestTimeoutOverride > 0 {
+		return RequestTimeoutOverride
+	}
+
+	return Timeout
+}
+
+// deadlineRoundTripper bounds each registry HTTP request — including body reads —
+// by an overall wall, the same mechanism http.Client.Timeout uses internally.
+// go-containerregistry (v0.21.9) exposes only remote.WithTransport, with no
+// http.Client hook, so the wall must be a RoundTripper decorator. It wraps the
+// shared *http.Transport, so the connection-phase timeouts still apply beneath
+// it. The base transport and timeout are captured when GetRemoteOptions builds
+// the wrapper, so a transport rebuilt by ConfigureTransport and a retuned budget
+// are picked up the next time the options are constructed.
+type deadlineRoundTripper struct {
+	base    http.RoundTripper
+	timeout time.Duration
+}
+
+func (d deadlineRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if d.timeout <= 0 {
+		return d.base.RoundTrip(req)
+	}
+
+	ctx, cancel := context.WithTimeout(req.Context(), d.timeout)
+
+	resp, err := d.base.RoundTrip(req.WithContext(ctx))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	// Keep the deadline armed through body reading; releasing it here would let
+	// a slow body stall unbounded. cancelOnCloseBody releases it exactly once
+	// when the caller closes the body.
+	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+
+	return resp, nil
+}
+
+// cancelOnCloseBody wraps a response body so the request's context cancel func
+// is invoked exactly once when the body is closed, releasing the deadline set by
+// deadlineRoundTripper after the body has been fully read.
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.once.Do(b.cancel)
+
+	return err
 }
 
 // FailureKind is a stable, low-cardinality classification of why a bundle
@@ -510,7 +581,11 @@ func GetRemoteOptions(kc authn.Keychain) []remote.Option {
 	var opts = []remote.Option{
 		remote.WithUserAgent(UserAgentString),
 		remote.WithAuthFromKeychain(kc),
-		remote.WithTransport(registryTransport),
+		// Wrap the shared transport in the overall per-request wall. The base
+		// stays the *http.Transport singleton so ConfigureTransport rebuilds and
+		// re-tunes its connection-phase timeouts; the wrapper is rebuilt here on
+		// each call with the current request timeout.
+		remote.WithTransport(deadlineRoundTripper{base: registryTransport, timeout: resolveRequestTimeout()}),
 	}
 
 	return opts
