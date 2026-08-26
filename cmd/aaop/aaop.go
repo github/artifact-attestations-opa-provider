@@ -50,6 +50,11 @@ var (
 	registryTLSHandshakeTimeout   = flag.Duration("registry-tls-handshake-timeout", 0, "override TLS handshake timeout to the registry; 0 derives it from bundle-timeout")
 	registryResponseHeaderTimeout = flag.Duration("registry-response-header-timeout", 0, "override wait for the registry's response headers; 0 derives it from bundle-timeout")
 
+	registryDialKeepAlive       = flag.Duration("registry-dial-keep-alive", 10*time.Second, "TCP keep-alive period for registry connections, keeping pooled connections warm; 0 uses Go's default keep-alive period (~15s)")
+	registryIdleConnTimeout     = flag.Duration("registry-idle-conn-timeout", 10*time.Second, "how long an idle registry connection is kept in the pool before being closed; 0 means no limit")
+	registryMaxIdleConns        = flag.Int("registry-max-idle-conns", 25, "max idle registry connections retained across all hosts; 0 means unlimited")
+	registryMaxIdleConnsPerHost = flag.Int("registry-max-idle-conns-per-host", 25, "max idle registry connections retained per host; 0 uses the net/http default of 2")
+
 	updateCABundle = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
 )
 
@@ -74,6 +79,10 @@ func main() {
 	var err error
 
 	flag.Parse()
+	if err := configureRegistryPool(*registryDialKeepAlive, *registryIdleConnTimeout,
+		*registryMaxIdleConns, *registryMaxIdleConnsPerHost); err != nil {
+		log.Fatal(err)
+	}
 	if err := configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay,
 		*registryDialTimeout, *registryTLSHandshakeTimeout, *registryResponseHeaderTimeout); err != nil {
 		log.Fatal(err)
@@ -233,6 +242,48 @@ func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration,
 	// Rebuild the shared registry transport now that Timeout and the overrides
 	// are set, so its connection-phase timeouts track the per-attempt budget.
 	fetcher.ConfigureTransport()
+	return nil
+}
+
+// configureRegistryPool validates the registry connection-pool tuning flags and
+// applies them to the fetcher package vars. It deliberately does not rebuild the
+// shared transport itself: call it before configureBundleFetcher, whose
+// ConfigureTransport() applies these values and the fetch-budget timeouts in a
+// single rebuild.
+//
+// Zero is accepted for every value; only negatives are rejected. Zero's meaning
+// differs by field: dialKeepAlive is a net.Dialer.KeepAlive (not an
+// http.Transport field), so 0 selects Go's default keep-alive period (~15s);
+// idleConnTimeout=0 and maxIdleConns=0 mean "no limit"; maxIdleConnsPerHost=0
+// selects net/http's default of 2.
+func configureRegistryPool(dialKeepAlive, idleConnTimeout time.Duration, maxIdleConns, maxIdleConnsPerHost int) error {
+	for _, d := range []struct {
+		name  string
+		value time.Duration
+	}{
+		{"registry-dial-keep-alive", dialKeepAlive},
+		{"registry-idle-conn-timeout", idleConnTimeout},
+	} {
+		if d.value < 0 {
+			return fmt.Errorf("%s must not be negative", d.name)
+		}
+	}
+	for _, c := range []struct {
+		name  string
+		value int
+	}{
+		{"registry-max-idle-conns", maxIdleConns},
+		{"registry-max-idle-conns-per-host", maxIdleConnsPerHost},
+	} {
+		if c.value < 0 {
+			return fmt.Errorf("%s must not be negative", c.name)
+		}
+	}
+
+	fetcher.DialKeepAlive = dialKeepAlive
+	fetcher.IdleConnTimeout = idleConnTimeout
+	fetcher.MaxIdleConns = maxIdleConns
+	fetcher.MaxIdleConnsPerHost = maxIdleConnsPerHost
 	return nil
 }
 

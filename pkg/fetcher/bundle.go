@@ -45,6 +45,39 @@ var (
 	// verbatim. The overrides let an operator with an unusual registry or
 	// forward proxy tune a single phase without restating the whole budget.
 	ResponseHeaderTimeoutOverride = time.Duration(0)
+
+	// Connection-pool tuning. Unlike the per-phase timeouts above, these are
+	// direct values (not derived from Timeout): they govern the lifetime and
+	// size of the pooled keep-alive connections, which is a function of the
+	// registry/network topology, not the per-attempt fetch budget. They exist
+	// because the connection-establishment timeouts only bound a *new*
+	// connection — a connection that a load balancer or gateway silently drops
+	// while idle in the pool is invisible to them and stalls the next request
+	// that reuses it. Shorter lifetimes evict such a connection before it is
+	// reused; a smaller pool caps how many dead connections can accumulate.
+
+	// DialKeepAlive is the TCP keep-alive period for registry connections. A
+	// shorter period keeps a pooled connection warm so an idle network
+	// intermediary (e.g. an Azure Load Balancer with a ~4-minute idle cutoff)
+	// is less likely to silently reap it. It is a net.Dialer.KeepAlive, so zero
+	// selects Go's default period (~15s); a negative value would disable
+	// keep-alives (configureRegistryPool rejects negatives).
+	DialKeepAlive = 10 * time.Second
+	// IdleConnTimeout is how long a connection may sit idle in the pool before
+	// it is closed. Well below common intermediary idle cutoffs, so a
+	// silently-dropped idle connection is retired by us rather than lingering to
+	// stall a future request. Zero means no limit (net/http semantics).
+	IdleConnTimeout = 10 * time.Second
+	// MaxIdleConns caps idle connections retained across all hosts. Sized from
+	// measured peak in-flight fetches per pod (single digits) doubled for the
+	// two hosts a fetch touches — the registry and the blob backend it
+	// 307-redirects to — so the reuse working set is covered with headroom while
+	// capping dead-connection accumulation far below go-containerregistry's
+	// inherited 100. Zero means unlimited (net/http semantics).
+	MaxIdleConns = 25
+	// MaxIdleConnsPerHost caps idle connections retained per host. Zero selects
+	// net/http's default of 2, so it is set explicitly alongside MaxIdleConns.
+	MaxIdleConnsPerHost = 25
 )
 
 // Registry connection-phase timeouts are a decomposition of the per-attempt
@@ -129,21 +162,25 @@ func pickPhaseTimeout(override, bundleTimeout time.Duration, fraction float64) t
 func newRegistryDialer(timeout time.Duration) *net.Dialer {
 	return &net.Dialer{
 		Timeout:   timeout,
-		KeepAlive: 30 * time.Second,
+		KeepAlive: DialKeepAlive,
 	}
 }
 
 // newRegistryTransport returns an http.Transport based on go-containerregistry's
 // DefaultTransport but with the connection-establishment timeouts resolved from
-// the current per-attempt budget (see resolveTransportTimeouts). Cloning the
-// default preserves the other tuned fields (idle-connection pool sizes, HTTP/2,
-// proxy) while overriding only the timeouts.
+// the current per-attempt budget (see resolveTransportTimeouts) and the idle
+// connection-pool lifetime/size tuned for self-healing (see DialKeepAlive,
+// IdleConnTimeout, MaxIdleConns). Cloning the default preserves the remaining
+// fields (HTTP/2, proxy) while overriding only what we tune.
 func newRegistryTransport() *http.Transport {
 	dial, tlsHandshake, responseHeader := resolveTransportTimeouts(Timeout)
 	t := remote.DefaultTransport.(*http.Transport).Clone()
 	t.DialContext = newRegistryDialer(dial).DialContext
 	t.TLSHandshakeTimeout = tlsHandshake
 	t.ResponseHeaderTimeout = responseHeader
+	t.IdleConnTimeout = IdleConnTimeout
+	t.MaxIdleConns = MaxIdleConns
+	t.MaxIdleConnsPerHost = MaxIdleConnsPerHost
 	return t
 }
 
