@@ -144,3 +144,89 @@ func TestConfigureBundleFetcherRejectsInvalidValues(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigureRegistryPool(t *testing.T) {
+	originalKeepAlive := fetcher.DialKeepAlive
+	originalIdle := fetcher.IdleConnTimeout
+	originalMaxIdle := fetcher.MaxIdleConns
+	originalMaxIdlePerHost := fetcher.MaxIdleConnsPerHost
+	t.Cleanup(func() {
+		fetcher.DialKeepAlive = originalKeepAlive
+		fetcher.IdleConnTimeout = originalIdle
+		fetcher.MaxIdleConns = originalMaxIdle
+		fetcher.MaxIdleConnsPerHost = originalMaxIdlePerHost
+		fetcher.ConfigureTransport()
+	})
+
+	err := configureRegistryPool(15*time.Second, 20*time.Second, 30, 12)
+
+	require.NoError(t, err)
+	assert.Equal(t, 15*time.Second, fetcher.DialKeepAlive)
+	assert.Equal(t, 20*time.Second, fetcher.IdleConnTimeout)
+	assert.Equal(t, 30, fetcher.MaxIdleConns)
+	assert.Equal(t, 12, fetcher.MaxIdleConnsPerHost)
+}
+
+func TestConfigureRegistryPoolAllowsZero(t *testing.T) {
+	originalKeepAlive := fetcher.DialKeepAlive
+	originalIdle := fetcher.IdleConnTimeout
+	originalMaxIdle := fetcher.MaxIdleConns
+	originalMaxIdlePerHost := fetcher.MaxIdleConnsPerHost
+	t.Cleanup(func() {
+		fetcher.DialKeepAlive = originalKeepAlive
+		fetcher.IdleConnTimeout = originalIdle
+		fetcher.MaxIdleConns = originalMaxIdle
+		fetcher.MaxIdleConnsPerHost = originalMaxIdlePerHost
+		fetcher.ConfigureTransport()
+	})
+
+	// Zero is a valid net/http choice (no limit / use default), so it is
+	// accepted verbatim rather than rejected or coerced to the defaults.
+	err := configureRegistryPool(0, 0, 0, 0)
+
+	require.NoError(t, err)
+	assert.Zero(t, fetcher.DialKeepAlive)
+	assert.Zero(t, fetcher.IdleConnTimeout)
+	assert.Zero(t, fetcher.MaxIdleConns)
+	assert.Zero(t, fetcher.MaxIdleConnsPerHost)
+}
+
+func TestConfigureRegistryPoolRejectsNegative(t *testing.T) {
+	tests := []struct {
+		name                string
+		dialKeepAlive       time.Duration
+		idleConnTimeout     time.Duration
+		maxIdleConns        int
+		maxIdleConnsPerHost int
+		errorText           string
+	}{
+		{
+			name:          "negative dial keep-alive",
+			dialKeepAlive: -time.Millisecond,
+			errorText:     "registry-dial-keep-alive must not be negative",
+		},
+		{
+			name:            "negative idle conn timeout",
+			idleConnTimeout: -time.Millisecond,
+			errorText:       "registry-idle-conn-timeout must not be negative",
+		},
+		{
+			name:         "negative max idle conns",
+			maxIdleConns: -1,
+			errorText:    "registry-max-idle-conns must not be negative",
+		},
+		{
+			name:                "negative max idle conns per host",
+			maxIdleConnsPerHost: -1,
+			errorText:           "registry-max-idle-conns-per-host must not be negative",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := configureRegistryPool(test.dialKeepAlive, test.idleConnTimeout,
+				test.maxIdleConns, test.maxIdleConnsPerHost)
+			require.EqualError(t, err, test.errorText)
+		})
+	}
+}

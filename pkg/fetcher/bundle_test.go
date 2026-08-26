@@ -348,7 +348,7 @@ func TestNewRegistryDialerUsesResolvedTimeout(t *testing.T) {
 	// are caught).
 	d := newRegistryDialer(1234 * time.Millisecond)
 	assert.Equal(t, 1234*time.Millisecond, d.Timeout)
-	assert.Equal(t, 30*time.Second, d.KeepAlive)
+	assert.Equal(t, DialKeepAlive, d.KeepAlive, "dialer must carry the configured keep-alive, not a hardcoded value")
 }
 
 func TestRegistryTransportDialContextEnforcesDialTimeout(t *testing.T) {
@@ -382,12 +382,36 @@ func TestNewRegistryTransportUsesResolvedTimeouts(t *testing.T) {
 	assert.Equal(t, wantTLS, tr.TLSHandshakeTimeout)
 	assert.Equal(t, wantResponseHeader, tr.ResponseHeaderTimeout)
 
-	// Cloning the default transport must preserve its connection-pool tuning
-	// rather than resetting to the net/http zero values.
-	assert.Equal(t, 100, tr.MaxIdleConns)
-	assert.Equal(t, 50, tr.MaxIdleConnsPerHost)
+	// The transport must carry the tuned idle-pool lifetime and sizes, which
+	// override go-containerregistry's inherited defaults (90s / 100 / 50).
+	assert.Equal(t, 10*time.Second, tr.IdleConnTimeout)
+	assert.Equal(t, 25, tr.MaxIdleConns)
+	assert.Equal(t, 25, tr.MaxIdleConnsPerHost)
+	assert.Equal(t, IdleConnTimeout, tr.IdleConnTimeout, "transport must wire the IdleConnTimeout package var")
+	assert.Equal(t, MaxIdleConns, tr.MaxIdleConns, "transport must wire the MaxIdleConns package var")
+	assert.Equal(t, MaxIdleConnsPerHost, tr.MaxIdleConnsPerHost, "transport must wire the MaxIdleConnsPerHost package var")
+
+	// Cloning the default transport must preserve its remaining tuning rather
+	// than resetting to the net/http zero values.
 	assert.True(t, tr.ForceAttemptHTTP2)
 	require.NotNil(t, tr.DialContext)
+}
+
+func TestNewRegistryTransportAppliesPoolTuning(t *testing.T) {
+	// Non-default values must flow through to the transport, proving the pool
+	// fields are wired from the package vars rather than hardcoded.
+	origIdle, origMax, origMaxPer := IdleConnTimeout, MaxIdleConns, MaxIdleConnsPerHost
+	t.Cleanup(func() {
+		IdleConnTimeout, MaxIdleConns, MaxIdleConnsPerHost = origIdle, origMax, origMaxPer
+	})
+	IdleConnTimeout = 11 * time.Second
+	MaxIdleConns = 13
+	MaxIdleConnsPerHost = 9
+
+	tr := newRegistryTransport()
+	assert.Equal(t, 11*time.Second, tr.IdleConnTimeout)
+	assert.Equal(t, 13, tr.MaxIdleConns)
+	assert.Equal(t, 9, tr.MaxIdleConnsPerHost)
 }
 
 func TestConfigureTransportRebuildsForCurrentTimeout(t *testing.T) {
