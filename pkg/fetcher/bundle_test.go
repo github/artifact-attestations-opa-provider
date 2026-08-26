@@ -382,14 +382,13 @@ func TestNewRegistryTransportUsesResolvedTimeouts(t *testing.T) {
 	assert.Equal(t, wantTLS, tr.TLSHandshakeTimeout)
 	assert.Equal(t, wantResponseHeader, tr.ResponseHeaderTimeout)
 
-	// The transport must carry the tuned idle-pool lifetime and sizes, which
-	// override go-containerregistry's inherited defaults (90s / 100 / 50).
+	// The transport must carry the tuned idle-pool lifetime and sizes (the
+	// package-var defaults), overriding go-containerregistry's inherited
+	// 90s / 100 / 50. Wiring of non-default values is covered separately by
+	// TestNewRegistryTransportAppliesPoolTuning.
 	assert.Equal(t, 10*time.Second, tr.IdleConnTimeout)
 	assert.Equal(t, 25, tr.MaxIdleConns)
 	assert.Equal(t, 25, tr.MaxIdleConnsPerHost)
-	assert.Equal(t, IdleConnTimeout, tr.IdleConnTimeout, "transport must wire the IdleConnTimeout package var")
-	assert.Equal(t, MaxIdleConns, tr.MaxIdleConns, "transport must wire the MaxIdleConns package var")
-	assert.Equal(t, MaxIdleConnsPerHost, tr.MaxIdleConnsPerHost, "transport must wire the MaxIdleConnsPerHost package var")
 
 	// Cloning the default transport must preserve its remaining tuning rather
 	// than resetting to the net/http zero values.

@@ -50,7 +50,7 @@ var (
 	registryTLSHandshakeTimeout   = flag.Duration("registry-tls-handshake-timeout", 0, "override TLS handshake timeout to the registry; 0 derives it from bundle-timeout")
 	registryResponseHeaderTimeout = flag.Duration("registry-response-header-timeout", 0, "override wait for the registry's response headers; 0 derives it from bundle-timeout")
 
-	registryDialKeepAlive       = flag.Duration("registry-dial-keep-alive", 10*time.Second, "TCP keep-alive period for registry connections, keeping pooled connections warm; 0 uses the net/http default")
+	registryDialKeepAlive       = flag.Duration("registry-dial-keep-alive", 10*time.Second, "TCP keep-alive period for registry connections, keeping pooled connections warm; 0 uses Go's default keep-alive period (~15s)")
 	registryIdleConnTimeout     = flag.Duration("registry-idle-conn-timeout", 10*time.Second, "how long an idle registry connection is kept in the pool before being closed; 0 means no limit")
 	registryMaxIdleConns        = flag.Int("registry-max-idle-conns", 25, "max idle registry connections retained across all hosts; 0 means unlimited")
 	registryMaxIdleConnsPerHost = flag.Int("registry-max-idle-conns-per-host", 25, "max idle registry connections retained per host; 0 uses the net/http default of 2")
@@ -249,8 +249,13 @@ func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration,
 // applies them to the fetcher package vars. It deliberately does not rebuild the
 // shared transport itself: call it before configureBundleFetcher, whose
 // ConfigureTransport() applies these values and the fetch-budget timeouts in a
-// single rebuild. Zero is accepted for every value (net/http reads it as "no
-// limit" / "use default"); only negative values are rejected.
+// single rebuild.
+//
+// Zero is accepted for every value; only negatives are rejected. Zero's meaning
+// differs by field: dialKeepAlive is a net.Dialer.KeepAlive (not an
+// http.Transport field), so 0 selects Go's default keep-alive period (~15s);
+// idleConnTimeout=0 and maxIdleConns=0 mean "no limit"; maxIdleConnsPerHost=0
+// selects net/http's default of 2.
 func configureRegistryPool(dialKeepAlive, idleConnTimeout time.Duration, maxIdleConns, maxIdleConnsPerHost int) error {
 	for _, d := range []struct {
 		name  string

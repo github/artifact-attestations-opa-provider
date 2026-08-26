@@ -59,7 +59,9 @@ var (
 	// DialKeepAlive is the TCP keep-alive period for registry connections. A
 	// shorter period keeps a pooled connection warm so an idle network
 	// intermediary (e.g. an Azure Load Balancer with a ~4-minute idle cutoff)
-	// is less likely to silently reap it.
+	// is less likely to silently reap it. It is a net.Dialer.KeepAlive, so zero
+	// selects Go's default period (~15s); a negative value would disable
+	// keep-alives (configureRegistryPool rejects negatives).
 	DialKeepAlive = 10 * time.Second
 	// IdleConnTimeout is how long a connection may sit idle in the pool before
 	// it is closed. Well below common intermediary idle cutoffs, so a
