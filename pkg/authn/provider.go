@@ -3,7 +3,7 @@ package authn
 import (
 	"context"
 	"log/slog"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -21,6 +21,13 @@ const defaultKeychainRefreshInterval = 5 * time.Minute
 // rebuild can never wedge the refresher.
 const keychainBuildTimeout = 30 * time.Second
 
+// keychainSnapshot wraps the cached keychain so it can be held in an
+// atomic.Pointer; authn.Keychain is an interface and cannot be stored in one
+// directly.
+type keychainSnapshot struct {
+	kc authn.Keychain
+}
+
 // KeyChainProvider is used to provide k8s keychains, which can be used
 // to authenticate certain requests like fetching resources from an OCI
 // registry.
@@ -37,8 +44,9 @@ type KeyChainProvider struct {
 	// a stub without a live cluster; production uses buildKeychain.
 	build func(ctx context.Context) (authn.Keychain, bool)
 
-	mu     sync.RWMutex
-	cached authn.Keychain
+	// cached holds the current keychain snapshot. Reads are lock-free; the
+	// background refresher swaps in a new snapshot on each successful build.
+	cached atomic.Pointer[keychainSnapshot]
 }
 
 // NewKeyChainProvider returns a new instance for a namespace and a set of
@@ -159,9 +167,7 @@ func (k *KeyChainProvider) refreshLoop(ctx context.Context, tick <-chan time.Tim
 }
 
 func (k *KeyChainProvider) set(kc authn.Keychain) {
-	k.mu.Lock()
-	k.cached = kc
-	k.mu.Unlock()
+	k.cached.Store(&keychainSnapshot{kc: kc})
 }
 
 // KeyChain returns the cached keychain from this provider. It performs no
@@ -170,13 +176,10 @@ func (k *KeyChainProvider) set(kc authn.Keychain) {
 // produced nothing), it returns the default keychain, which works for public
 // registries.
 func (k *KeyChainProvider) KeyChain(_ context.Context) (authn.Keychain, error) {
-	k.mu.RLock()
-	kc := k.cached
-	k.mu.RUnlock()
-
-	if kc == nil {
+	s := k.cached.Load()
+	if s == nil || s.kc == nil {
 		return authn.DefaultKeychain, nil
 	}
 
-	return kc, nil
+	return s.kc, nil
 }
