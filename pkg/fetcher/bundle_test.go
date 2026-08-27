@@ -238,7 +238,7 @@ func TestRetryBundleFailsFastOnThrottle(t *testing.T) {
 	assert.Equal(t, 1, attempts, "a 429 must fail fast, not retry in-line")
 
 	var fe *FetchError
-	assert.ErrorAs(t, err, &fe)
+	require.ErrorAs(t, err, &fe)
 	assert.Equal(t, KindThrottled, fe.Kind)
 	assert.Equal(t, 1, fe.Attempts)
 }
