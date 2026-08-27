@@ -360,6 +360,19 @@ func DoBundleFromName(ctx context.Context, ref name.Reference, ro []remote.Optio
 	opts = append(opts, ro...)
 	opts = append(opts, remote.WithContext(ctx))
 
+	// Share one authenticated puller across the Get/Referrers/Image calls below
+	// so the registry auth handshake (GET /v2/ ping + token exchange) runs once
+	// for this attempt instead of once per call. go-containerregistry caches auth
+	// per-repo on a Puller; the package-level remote.* helpers otherwise mint a
+	// throwaway puller each call, discarding the still-valid token. Scoped to this
+	// single attempt (never across retries/images) to avoid init poisoning a shared
+	// puller's cached auth error.
+	puller, err := remote.NewPuller(opts...)
+	if err != nil {
+		return nil, nil, newDescriptorError(err)
+	}
+	opts = append(opts, remote.Reuse(puller))
+
 	desc, err := remote.Get(ref, opts...)
 	if err != nil {
 		return nil, nil, newDescriptorError(err)
