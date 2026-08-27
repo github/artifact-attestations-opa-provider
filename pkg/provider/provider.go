@@ -36,7 +36,7 @@ type KeyChainProvider interface {
 
 // BundleFetcher fetches bundles from a remote OCI registry.
 type BundleFetcher interface {
-	BundleFromName(ctx context.Context, ref name.Reference, remoteOpts []remote.Option) ([]*bundle.Bundle, *v1.Hash, error)
+	BundleFromName(ctx context.Context, ref name.Reference, remoteOpts []remote.Option) ([]*bundle.Bundle, *v1.Hash, int, error)
 	GetRemoteOptions(kc authn.Keychain) []remote.Option
 }
 
@@ -124,7 +124,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		start := time.Now()
-		bundles, hash, err := p.bf.BundleFromName(ctx, ref, ro)
+		bundles, hash, attempts, err := p.bf.BundleFromName(ctx, ref, ro)
 		dur := time.Since(start)
 		// Record the fetch latency for both successful and failed fetches.
 		// The tail of this histogram (failed fetches timing out) is a key
@@ -133,7 +133,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		metrics.AttestationsPullTimer.Observe(dur.Seconds())
 
 		if err != nil {
-			reason, step, attempts := fetcher.Classify(err)
+			reason, step, _ := fetcher.Classify(err)
 			metrics.AttestationsRetrieveFail.WithLabelValues(reason).Inc()
 			imgLog.Error("validate: error fetching bundles",
 				"reason", reason,
@@ -151,7 +151,8 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		metrics.AttestationsRetrieved.Add(float64(len(bundles)))
 		imgLog.Info("validate: fetched OCI bundles",
 			"count", len(bundles),
-			"duration_s", dur.Seconds())
+			"duration_s", dur.Seconds(),
+			"attempts", attempts)
 
 		if len(bundles) == 0 {
 			metrics.AttestationsMissing.Inc()

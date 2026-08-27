@@ -131,7 +131,7 @@ func main() {
 			log.Print(err)
 		}
 		ctx := context.Background()
-		if b, h, err = fetcher.BundleFromName(ctx, ref, remoteOpts); err != nil {
+		if b, h, _, err = fetcher.BundleFromName(ctx, ref, remoteOpts); err != nil {
 			log.Print(err)
 		}
 	}

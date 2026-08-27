@@ -265,7 +265,7 @@ type DefaultBundleFetcher struct{}
 
 // BundleFromName fetches a sigstore bundle for a container from the OCI
 // registry.
-func (*DefaultBundleFetcher) BundleFromName(ctx context.Context, ref name.Reference, ro []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
+func (*DefaultBundleFetcher) BundleFromName(ctx context.Context, ref name.Reference, ro []remote.Option) ([]*bundle.Bundle, *v1.Hash, int, error) {
 	return BundleFromName(ctx, ref, ro)
 }
 
@@ -276,7 +276,7 @@ func (*DefaultBundleFetcher) GetRemoteOptions(kc authn.Keychain) []remote.Option
 
 // BundleFromName fetches a sigstore bundle for a container from
 // a registry with retry.
-func BundleFromName(ctx context.Context, ref name.Reference, ro []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
+func BundleFromName(ctx context.Context, ref name.Reference, ro []remote.Option) ([]*bundle.Bundle, *v1.Hash, int, error) {
 	return retryBundle(ctx, MaxAttempts, Timeout, Delay, func(attemptCtx context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		return DoBundleFromName(attemptCtx, ref, ro)
 	})
@@ -284,7 +284,7 @@ func BundleFromName(ctx context.Context, ref name.Reference, ro []remote.Option)
 
 type bundleAttempt func(context.Context) ([]*bundle.Bundle, *v1.Hash, error)
 
-func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Duration, attempt bundleAttempt) ([]*bundle.Bundle, *v1.Hash, error) {
+func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Duration, attempt bundleAttempt) ([]*bundle.Bundle, *v1.Hash, int, error) {
 	var lastErr error
 	var attempts int
 
@@ -294,7 +294,7 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 			select {
 			case <-ctx.Done():
 				t.Stop()
-				return nil, nil, &FetchError{
+				return nil, nil, attempts, &FetchError{
 					Kind:        kindFromContext(ctx.Err()),
 					Attempts:    attempts,
 					Recoverable: false,
@@ -311,7 +311,7 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 		b, h, err := attempt(ictx)
 		cancel()
 		if err == nil {
-			return b, h, nil
+			return b, h, attempts, nil
 		}
 		lastErr = err
 
@@ -320,7 +320,7 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 		var fe *FetchError
 		if errors.As(err, &fe) && !fe.Recoverable {
 			fe.Attempts = attempts
-			return nil, nil, fe
+			return nil, nil, attempts, fe
 		}
 		if cerr := ctx.Err(); cerr != nil {
 			// Preserve the step from the in-flight attempt (if any) so
@@ -329,7 +329,7 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 			if fe != nil {
 				step = fe.Step
 			}
-			return nil, nil, &FetchError{
+			return nil, nil, attempts, &FetchError{
 				Step:        step,
 				Kind:        kindFromContext(cerr),
 				Attempts:    attempts,
@@ -349,7 +349,7 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 			"error", err)
 	}
 
-	return nil, nil, finalizeFetchError(lastErr, attempts)
+	return nil, nil, attempts, finalizeFetchError(lastErr, attempts)
 }
 
 // DoBundleFromName fetches a sigstore bundle for a container from
