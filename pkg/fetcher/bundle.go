@@ -415,6 +415,10 @@ func DoBundleFromName(ctx context.Context, ref name.Reference, ro []remote.Optio
 // failure Kind (and HTTP status, when available) from the underlying error,
 // falling back to the supplied kind for unclassified errors. Authentication
 // failures and invalid bundles are marked non-recoverable so retries stop.
+// Throttling (HTTP 429) is also marked non-recoverable: an in-line retry within
+// our per-request budget cannot outlast the registry's aggregate, per-identity
+// rate-limit window, and retrying only adds load while the registry is shedding
+// it.
 func newFetchError(step Step, fallback FailureKind, err error) *FetchError {
 	kind, code := classifyTransport(err)
 	if kind == KindUnknown {
@@ -423,7 +427,8 @@ func newFetchError(step Step, fallback FailureKind, err error) *FetchError {
 	recoverable := kind != KindUnauthorized &&
 		kind != KindForbidden &&
 		kind != KindBundleInvalid &&
-		kind != KindNotFound
+		kind != KindNotFound &&
+		kind != KindThrottled
 	return &FetchError{
 		Step:        step,
 		Kind:        kind,
