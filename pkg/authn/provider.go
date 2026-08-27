@@ -32,9 +32,10 @@ type KeyChainProvider struct {
 	imagePullSecrets []string
 	refreshInterval  time.Duration
 
-	// build constructs a keychain. It is a field so tests can inject a stub
-	// without a live cluster; production uses buildKeychain.
-	build func(ctx context.Context) authn.Keychain
+	// build constructs a keychain and reports whether the configured in-cluster
+	// authenticators were built successfully. It is a field so tests can inject
+	// a stub without a live cluster; production uses buildKeychain.
+	build func(ctx context.Context) (authn.Keychain, bool)
 
 	mu     sync.RWMutex
 	cached authn.Keychain
@@ -69,52 +70,61 @@ func NewKeyChainProvider(ns string, ips []string, refresh time.Duration) *KeyCha
 }
 
 // buildKeychain assembles the keychain from the in-cluster authenticators,
-// timing the build so its latency is observable off the request path. It never
-// returns an error: on partial failure it logs and falls back to whatever
-// keychains it could assemble (at minimum the default keychain).
-func (k *KeyChainProvider) buildKeychain(ctx context.Context) authn.Keychain {
+// timing the build so its latency is observable off the request path. The
+// returned bool reports whether both in-cluster authenticators were built
+// successfully; if either fails it is false. The keychain itself is always
+// non-nil: on failure it falls back to whatever could be assembled (at minimum
+// the default keychain), which serves the initial cold-start build. A
+// background refresh only adopts a build whose bool is true, so a degraded
+// rebuild never replaces a good keychain with a default-only one.
+func (k *KeyChainProvider) buildKeychain(ctx context.Context) (authn.Keychain, bool) {
 	start := time.Now()
 	defer func() {
 		metrics.KeychainBuildTimer.Observe(time.Since(start).Seconds())
 	}()
 
-	var kc authn.Keychain
 	var kcs = []authn.Keychain{
 		authn.DefaultKeychain,
 	}
-	var err error
+	ok := true
 
 	// Add the kubernetes authenticator
-	kc, err = kubernetes.NewInCluster(ctx, kubernetes.Options{
+	if kc, err := kubernetes.NewInCluster(ctx, kubernetes.Options{
 		Namespace:        k.namespace,
 		ImagePullSecrets: k.imagePullSecrets,
-	})
-	if err != nil {
+	}); err != nil {
 		slog.Error("failed to add kubernetes key chain",
 			"error", err)
+		ok = false
 	} else {
 		kcs = append(kcs, kc)
 	}
 
 	// Add a "cloud k8s" authenticator
-	kc, err = k8schain.NewInCluster(ctx, k8schain.Options{
+	if kc, err := k8schain.NewInCluster(ctx, k8schain.Options{
 		Namespace: k.namespace,
-	})
-	if err != nil {
+	}); err != nil {
 		slog.Error("failed to add k8schain key chain",
 			"error", err)
+		ok = false
 	} else {
 		kcs = append(kcs, kc)
 	}
 
-	return authn.NewMultiKeychain(kcs...)
+	return authn.NewMultiKeychain(kcs...), ok
 }
 
-// Start performs one synchronous initial build so the first requests are warm,
-// then refreshes the cached keychain on refreshInterval in the background until
-// ctx is done.
+// Start performs one bounded synchronous initial build so the first requests
+// are warm, then refreshes the cached keychain on refreshInterval in the
+// background until ctx is done. The initial build is best-effort: it is bounded
+// by keychainBuildTimeout so a stalled dependency cannot keep the process from
+// listening, and its result is cached even if incomplete (KeyChain then serves
+// the default keychain until the first successful refresh).
 func (k *KeyChainProvider) Start(ctx context.Context) {
-	k.set(k.build(ctx))
+	bctx, cancel := context.WithTimeout(ctx, keychainBuildTimeout)
+	kc, _ := k.build(bctx)
+	cancel()
+	k.set(kc)
 
 	t := time.NewTicker(k.refreshInterval)
 	go func() {
@@ -124,8 +134,10 @@ func (k *KeyChainProvider) Start(ctx context.Context) {
 }
 
 // refreshLoop rebuilds the cached keychain each time tick fires until ctx is
-// done. A build is bounded by keychainBuildTimeout; a build that yields no
-// keychain leaves the last-good instance in place.
+// done. A build is bounded by keychainBuildTimeout. The cache is swapped only
+// when the build reports success; a failed or degraded build (e.g. the
+// in-cluster authenticators erroring during a transient outage) leaves the
+// last-good keychain in place and increments KeychainRefreshFail.
 func (k *KeyChainProvider) refreshLoop(ctx context.Context, tick <-chan time.Time) {
 	for {
 		select {
@@ -133,13 +145,13 @@ func (k *KeyChainProvider) refreshLoop(ctx context.Context, tick <-chan time.Tim
 			return
 		case <-tick:
 			bctx, cancel := context.WithTimeout(ctx, keychainBuildTimeout)
-			kc := k.build(bctx)
+			kc, ok := k.build(bctx)
 			cancel()
-			if kc != nil {
+			if ok && kc != nil {
 				k.set(kc)
 				continue
 			}
-			// Keep the last-good keychain when a refresh yields nothing.
+			// Keep the last-good keychain when a refresh fails or is degraded.
 			metrics.KeychainRefreshFail.Inc()
 			slog.Error("failed to refresh key chain, keeping last-good")
 		}

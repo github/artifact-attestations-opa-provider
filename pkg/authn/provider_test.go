@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 )
 
 // stubKeychain is a minimal authn.Keychain that gives each build a distinct,
@@ -27,11 +30,12 @@ func keychainID(t *testing.T, kc authn.Keychain) int {
 }
 
 // countingBuilder returns a build func that hands out a fresh *stubKeychain on
-// each call (id 1, 2, 3, …) and a counter of how many times it has run.
-func countingBuilder() (func(context.Context) authn.Keychain, *atomic.Int64) {
+// each call (id 1, 2, 3, …), always reporting success, plus a counter of how
+// many times it has run.
+func countingBuilder() (func(context.Context) (authn.Keychain, bool), *atomic.Int64) {
 	var n atomic.Int64
-	build := func(_ context.Context) authn.Keychain {
-		return &stubKeychain{id: int(n.Add(1))}
+	build := func(_ context.Context) (authn.Keychain, bool) {
+		return &stubKeychain{id: int(n.Add(1))}, true
 	}
 	return build, &n
 }
@@ -95,7 +99,8 @@ func TestKeyChainRefreshSwapsCached(t *testing.T) {
 
 	// Warm the cache (id 1), then drive the refresh loop with a manual tick so
 	// the test doesn't depend on wall-clock timing.
-	k.set(k.build(ctx))
+	warm, _ := k.build(ctx)
+	k.set(warm)
 	require.Equal(t, int64(1), n.Load())
 	first, err := k.KeyChain(ctx)
 	require.NoError(t, err)
@@ -112,27 +117,33 @@ func TestKeyChainRefreshSwapsCached(t *testing.T) {
 	assert.Equal(t, int64(2), n.Load())
 }
 
-// TestKeyChainRefreshKeepsLastGoodOnNil verifies a refresh that yields no
-// keychain leaves the previous good instance in place.
-func TestKeyChainRefreshKeepsLastGoodOnNil(t *testing.T) {
+// TestKeyChainRefreshKeepsLastGoodOnFailure verifies a refresh whose build
+// reports failure leaves the previous good instance in place and increments the
+// failure metric, even when the build returns a (degraded) non-nil keychain —
+// the production case where the in-cluster authenticators error but
+// buildKeychain still returns a default-only MultiKeychain.
+func TestKeyChainRefreshKeepsLastGoodOnFailure(t *testing.T) {
 	var n atomic.Int64
-	build := func(_ context.Context) authn.Keychain {
-		// The second build (the background refresh) yields nothing.
+	build := func(_ context.Context) (authn.Keychain, bool) {
 		id := n.Add(1)
 		if id == 2 {
-			return nil
+			// A degraded rebuild: non-nil, but the authenticators failed.
+			return &stubKeychain{id: -1}, false
 		}
-		return &stubKeychain{id: int(id)}
+		return &stubKeychain{id: int(id)}, true
 	}
 	k := &KeyChainProvider{refreshInterval: time.Hour, build: build}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	k.set(k.build(ctx)) // id 1
+	warm, _ := k.build(ctx) // id 1
+	k.set(warm)
 	first, err := k.KeyChain(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, keychainID(t, first))
+
+	failBefore := testutil.ToFloat64(metrics.KeychainRefreshFail)
 
 	tick := make(chan time.Time)
 	go k.refreshLoop(ctx, tick)
@@ -143,6 +154,32 @@ func TestKeyChainRefreshKeepsLastGoodOnNil(t *testing.T) {
 
 	kc, err := k.KeyChain(ctx)
 	require.NoError(t, err)
-	assert.Same(t, first, kc, "a nil build must not replace the last-good keychain")
+	assert.Same(t, first, kc, "a failed (ok=false) refresh must not replace the last-good keychain")
 	assert.Equal(t, 1, keychainID(t, kc))
+
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(metrics.KeychainRefreshFail)-failBefore >= 1
+	}, time.Second, time.Millisecond, "a failed refresh should increment KeychainRefreshFail")
+}
+
+// TestStartInitialBuildIsBounded verifies the synchronous initial build runs
+// under a deadline-bound context so a stalled dependency cannot keep the
+// process from starting to listen.
+func TestStartInitialBuildIsBounded(t *testing.T) {
+	var hadDeadline atomic.Bool
+	build := func(ctx context.Context) (authn.Keychain, bool) {
+		_, ok := ctx.Deadline()
+		hadDeadline.Store(ok)
+		return &stubKeychain{id: 1}, true
+	}
+	// A parent context without its own deadline, so any deadline the build sees
+	// must have been added by Start.
+	k := &KeyChainProvider{refreshInterval: time.Hour, build: build}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	k.Start(ctx)
+
+	assert.True(t, hadDeadline.Load(),
+		"the initial build must run under a bounded context")
 }
