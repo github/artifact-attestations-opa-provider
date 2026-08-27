@@ -1,15 +1,25 @@
 package fetcher
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -217,14 +227,59 @@ func TestNewFetchErrorClassifiesThrottling(t *testing.T) {
 	fe := newFetchError(StepReferrers, KindReferrersUnavailable, &transport.Error{StatusCode: http.StatusTooManyRequests})
 	assert.Equal(t, KindThrottled, fe.Kind)
 	assert.Equal(t, http.StatusTooManyRequests, fe.StatusCode)
-	assert.True(t, fe.Recoverable, "throttling should be retried")
+	assert.False(t, fe.Recoverable, "429 is not cleared by in-line retry within our budget; fail fast")
 
 	// TooManyRequests diagnostic-code branch (status code not populated).
 	fe = newFetchError(StepDescriptor, KindDescriptorError, &transport.Error{
 		Errors: []transport.Diagnostic{{Code: transport.TooManyRequestsErrorCode}},
 	})
 	assert.Equal(t, KindThrottled, fe.Kind)
-	assert.True(t, fe.Recoverable, "throttling should be retried")
+	assert.False(t, fe.Recoverable, "429 is not cleared by in-line retry within our budget; fail fast")
+}
+
+func TestRetryBundleFailsFastOnThrottle(t *testing.T) {
+	var attempts int
+
+	_, _, err := retryBundle(t.Context(), 3, time.Second, time.Second, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		attempts++
+		return nil, nil, newBlobError(&transport.Error{StatusCode: http.StatusTooManyRequests})
+	})
+
+	assert.Equal(t, 1, attempts, "a 429 must fail fast, not retry in-line")
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindThrottled, fe.Kind)
+	assert.Equal(t, 1, fe.Attempts)
+}
+
+func TestNewFetchErrorRetriesThrottlingWhenEnabled(t *testing.T) {
+	t.Cleanup(func() { RetryThrottled = false })
+	RetryThrottled = true
+
+	fe := newFetchError(StepReferrers, KindReferrersUnavailable, &transport.Error{StatusCode: http.StatusTooManyRequests})
+	assert.Equal(t, KindThrottled, fe.Kind)
+	assert.True(t, fe.Recoverable, "with -bundle-retry-throttled a 429 is recoverable again")
+}
+
+func TestRetryBundleRetriesThrottleWhenEnabled(t *testing.T) {
+	t.Cleanup(func() { RetryThrottled = false })
+	RetryThrottled = true
+
+	const maxAttempts = 3
+	var attempts int
+
+	_, _, err := retryBundle(t.Context(), maxAttempts, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		attempts++
+		return nil, nil, newBlobError(&transport.Error{StatusCode: http.StatusTooManyRequests})
+	})
+
+	assert.Equal(t, maxAttempts, attempts, "with retry-throttled enabled a 429 retries like other recoverable errors")
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindThrottled, fe.Kind)
+	assert.Equal(t, maxAttempts, fe.Attempts)
 }
 
 func TestRetryBundlePreservesStepOnCancellation(t *testing.T) {
@@ -445,4 +500,126 @@ func restoreTransportOverrides(dial, tlsHandshake, responseHeader time.Duration)
 	DialTimeoutOverride = dial
 	TLSHandshakeTimeoutOverride = tlsHandshake
 	ResponseHeaderTimeoutOverride = responseHeader
+}
+
+// TestDoBundleFromNameSharesAuthHandshake stands up a fake bearer registry and
+// proves that a single DoBundleFromName fetch performs the registry auth
+// handshake (GET /v2/ ping + token exchange) exactly once, even though it makes
+// three top-level go-containerregistry calls (Get, Referrers, Image) against the
+// same repository. Without remote.Reuse(puller) each call mints its own throwaway
+// puller and the ping/token counts are 3/3 instead of 1/1.
+func TestDoBundleFromNameSharesAuthHandshake(t *testing.T) {
+	const bundleArtifactType = "application/vnd.dev.sigstore.bundle.v0.3+json"
+
+	bundleBlob, err := os.ReadFile("testdata/valid-bundle.json")
+	require.NoError(t, err)
+
+	// The attestation's single layer is the bundle JSON blob, addressed by its
+	// own digest.
+	layerHash, layerSize, err := v1.SHA256(bytes.NewReader(bundleBlob))
+	require.NoError(t, err)
+
+	// A throwaway empty-config descriptor. The config blob is never fetched on
+	// this path (we only read layers[0]), so it need not be served.
+	emptyHash, _, err := v1.SHA256(bytes.NewReader([]byte("{}")))
+	require.NoError(t, err)
+	emptyConfig := v1.Descriptor{MediaType: types.OCIConfigJSON, Digest: emptyHash, Size: 2}
+
+	// Attestation manifest referencing the bundle layer.
+	attBytes, err := json.Marshal(v1.Manifest{
+		SchemaVersion: 2,
+		MediaType:     types.OCIManifestSchema1,
+		ArtifactType:  bundleArtifactType,
+		Config:        emptyConfig,
+		Layers: []v1.Descriptor{{
+			MediaType: bundleArtifactType,
+			Digest:    layerHash,
+			Size:      layerSize,
+		}},
+	})
+	require.NoError(t, err)
+	attHash, _, err := v1.SHA256(bytes.NewReader(attBytes))
+	require.NoError(t, err)
+
+	// Referrers index pointing at the attestation manifest, carrying the
+	// sigstore bundle artifactType that DoBundleFromName filters on.
+	referrersBytes, err := json.Marshal(v1.IndexManifest{
+		SchemaVersion: 2,
+		MediaType:     types.OCIImageIndex,
+		Manifests: []v1.Descriptor{{
+			MediaType:    types.OCIManifestSchema1,
+			Digest:       attHash,
+			Size:         int64(len(attBytes)),
+			ArtifactType: bundleArtifactType,
+		}},
+	})
+	require.NoError(t, err)
+
+	// Subject image manifest, fetched by tag.
+	subjectBytes, err := json.Marshal(v1.Manifest{
+		SchemaVersion: 2,
+		MediaType:     types.OCIManifestSchema1,
+		Config:        emptyConfig,
+		Layers:        []v1.Descriptor{},
+	})
+	require.NoError(t, err)
+	subjectHash, _, err := v1.SHA256(bytes.NewReader(subjectBytes))
+	require.NoError(t, err)
+
+	var pingCount, tokenCount atomic.Int64
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v2/":
+			// Auth ping: challenge the client for a bearer token. Counting this
+			// is the whole point of the test — it must fire once per fetch.
+			pingCount.Add(1)
+			w.Header().Set("WWW-Authenticate",
+				fmt.Sprintf(`Bearer realm=%q,service="registry"`, server.URL+"/token"))
+			w.WriteHeader(http.StatusUnauthorized)
+		case r.URL.Path == "/token":
+			tokenCount.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"test-token","access_token":"test-token"}`))
+		case r.URL.Path == "/v2/test/app/manifests/latest":
+			w.Header().Set("Content-Type", string(types.OCIManifestSchema1))
+			w.Header().Set("Docker-Content-Digest", subjectHash.String())
+			_, _ = w.Write(subjectBytes)
+		case r.URL.Path == "/v2/test/app/manifests/"+attHash.String():
+			w.Header().Set("Content-Type", string(types.OCIManifestSchema1))
+			w.Header().Set("Docker-Content-Digest", attHash.String())
+			_, _ = w.Write(attBytes)
+		case strings.HasPrefix(r.URL.Path, "/v2/test/app/referrers/"):
+			w.Header().Set("Content-Type", string(types.OCIImageIndex))
+			_, _ = w.Write(referrersBytes)
+		case r.URL.Path == "/v2/test/app/blobs/"+layerHash.String():
+			_, _ = w.Write(bundleBlob)
+		default:
+			t.Errorf("unexpected registry request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	ref, err := name.ParseReference(
+		strings.TrimPrefix(server.URL, "http://")+"/test/app:latest",
+		name.Insecure,
+	)
+	require.NoError(t, err)
+
+	ro := []remote.Option{
+		remote.WithAuth(authn.Anonymous),
+		remote.WithTransport(http.DefaultTransport),
+	}
+
+	bundles, hash, err := DoBundleFromName(t.Context(), ref, ro)
+	require.NoError(t, err)
+	require.Len(t, bundles, 1)
+	require.NotNil(t, hash)
+	assert.Equal(t, subjectHash, *hash)
+
+	assert.Equal(t, int64(1), pingCount.Load(),
+		"auth ping should run once per fetch, not once per remote.* call")
+	assert.Equal(t, int64(1), tokenCount.Load(),
+		"token exchange should run once per fetch, not once per remote.* call")
 }

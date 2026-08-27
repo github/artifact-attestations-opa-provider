@@ -32,20 +32,21 @@ import (
 )
 
 var (
-	noPGI             = flag.Bool("no-public-good", false, "disable public good sigstore instance")
-	certsDir          = flag.String("certs", "", "Directory to where TLS certs are stored")
-	trustDomains      = flag.String("trust-domain", "", "comma separated trust domains to use")
-	tufRepo           = flag.String("tuf-repo", "", "URL to TUF repository")
-	tufRoot           = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
-	tufTargets        = flag.String("tuf-targets", "", "Comma separated list of targets to load as trust roots")
-	ns                = flag.String("namespace", "", "namespace the pod runs in")
-	ips               = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registries")
-	keychainRefresh   = flag.Duration("keychain-refresh-interval", 5*time.Minute, "how often the registry keychain is rebuilt in the background")
-	port              = flag.String("port", "8080", "port to listen to")
-	metricsPort       = flag.String("metrics-port", "9090", "port to listen to for metrics")
-	bundleMaxAttempts = flag.Int("bundle-max-attempts", 3, "max attempts to fetch a bundle")
-	bundleTimeout     = flag.Duration("bundle-timeout", 3*time.Second, "timeout for a single attempt to fetch a bundle")
-	bundleDelay       = flag.Duration("bundle-delay", 0, "delay between attempts to fetch a bundle")
+	noPGI                = flag.Bool("no-public-good", false, "disable public good sigstore instance")
+	certsDir             = flag.String("certs", "", "Directory to where TLS certs are stored")
+	trustDomains         = flag.String("trust-domain", "", "comma separated trust domains to use")
+	tufRepo              = flag.String("tuf-repo", "", "URL to TUF repository")
+	tufRoot              = flag.String("tuf-root", "", "Path to a root.json used to initialize TUF repository")
+	tufTargets           = flag.String("tuf-targets", "", "Comma separated list of targets to load as trust roots")
+	ns                   = flag.String("namespace", "", "namespace the pod runs in")
+	ips                  = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registries")
+	keychainRefresh      = flag.Duration("keychain-refresh-interval", 5*time.Minute, "how often the registry keychain is rebuilt in the background")
+	port                 = flag.String("port", "8080", "port to listen to")
+	metricsPort          = flag.String("metrics-port", "9090", "port to listen to for metrics")
+	bundleMaxAttempts    = flag.Int("bundle-max-attempts", 3, "max attempts to fetch a bundle")
+	bundleTimeout        = flag.Duration("bundle-timeout", 3*time.Second, "timeout for a single attempt to fetch a bundle")
+	bundleDelay          = flag.Duration("bundle-delay", 0, "delay between attempts to fetch a bundle")
+	bundleRetryThrottled = flag.Bool("bundle-retry-throttled", false, "retry registry throttling (HTTP 429) in-line instead of failing fast")
 
 	registryDialTimeout           = flag.Duration("registry-dial-timeout", 0, "override TCP dial timeout to the registry; 0 derives it from bundle-timeout")
 	registryTLSHandshakeTimeout   = flag.Duration("registry-tls-handshake-timeout", 0, "override TLS handshake timeout to the registry; 0 derives it from bundle-timeout")
@@ -88,6 +89,7 @@ func main() {
 		*registryDialTimeout, *registryTLSHandshakeTimeout, *registryResponseHeaderTimeout); err != nil {
 		log.Fatal(err)
 	}
+	fetcher.RetryThrottled = *bundleRetryThrottled
 
 	var vCfg = app.VerifierCfg{
 		TufRoot: *tufRoot,
