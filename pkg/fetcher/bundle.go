@@ -32,6 +32,14 @@ var (
 	Timeout = time.Second * 3
 	// Delay between attempts to fetch bundles.
 	Delay = time.Duration(0)
+	// RetryThrottled controls whether registry throttling (HTTP 429) is retried
+	// in-line. It is false by default: within the provider's short per-request
+	// budget an in-line retry cannot outlast an aggregate, per-identity
+	// rate-limit window and only adds load while the registry is shedding it, so
+	// a 429 fails fast. Operators whose registry uses a different rate-limit
+	// model (e.g. a refilling token bucket) can set this true to restore the
+	// previous retry behavior.
+	RetryThrottled = false
 
 	// DialTimeoutOverride optionally pins the registry TCP dial timeout. Zero
 	// (the default) derives it from Timeout via resolveTransportTimeouts; a
@@ -415,6 +423,10 @@ func DoBundleFromName(ctx context.Context, ref name.Reference, ro []remote.Optio
 // failure Kind (and HTTP status, when available) from the underlying error,
 // falling back to the supplied kind for unclassified errors. Authentication
 // failures and invalid bundles are marked non-recoverable so retries stop.
+// Throttling (HTTP 429) is non-recoverable unless RetryThrottled is set: within
+// the provider's short per-request budget an in-line retry cannot outlast the
+// registry's aggregate, per-identity rate-limit window and only adds load while
+// the registry is shedding it.
 func newFetchError(step Step, fallback FailureKind, err error) *FetchError {
 	kind, code := classifyTransport(err)
 	if kind == KindUnknown {
@@ -423,7 +435,8 @@ func newFetchError(step Step, fallback FailureKind, err error) *FetchError {
 	recoverable := kind != KindUnauthorized &&
 		kind != KindForbidden &&
 		kind != KindBundleInvalid &&
-		kind != KindNotFound
+		kind != KindNotFound &&
+		(RetryThrottled || kind != KindThrottled)
 	return &FetchError{
 		Step:        step,
 		Kind:        kind,

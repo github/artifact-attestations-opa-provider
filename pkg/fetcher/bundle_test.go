@@ -217,14 +217,59 @@ func TestNewFetchErrorClassifiesThrottling(t *testing.T) {
 	fe := newFetchError(StepReferrers, KindReferrersUnavailable, &transport.Error{StatusCode: http.StatusTooManyRequests})
 	assert.Equal(t, KindThrottled, fe.Kind)
 	assert.Equal(t, http.StatusTooManyRequests, fe.StatusCode)
-	assert.True(t, fe.Recoverable, "throttling should be retried")
+	assert.False(t, fe.Recoverable, "429 is not cleared by in-line retry within our budget; fail fast")
 
 	// TooManyRequests diagnostic-code branch (status code not populated).
 	fe = newFetchError(StepDescriptor, KindDescriptorError, &transport.Error{
 		Errors: []transport.Diagnostic{{Code: transport.TooManyRequestsErrorCode}},
 	})
 	assert.Equal(t, KindThrottled, fe.Kind)
-	assert.True(t, fe.Recoverable, "throttling should be retried")
+	assert.False(t, fe.Recoverable, "429 is not cleared by in-line retry within our budget; fail fast")
+}
+
+func TestRetryBundleFailsFastOnThrottle(t *testing.T) {
+	var attempts int
+
+	_, _, err := retryBundle(t.Context(), 3, time.Second, time.Second, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		attempts++
+		return nil, nil, newBlobError(&transport.Error{StatusCode: http.StatusTooManyRequests})
+	})
+
+	assert.Equal(t, 1, attempts, "a 429 must fail fast, not retry in-line")
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindThrottled, fe.Kind)
+	assert.Equal(t, 1, fe.Attempts)
+}
+
+func TestNewFetchErrorRetriesThrottlingWhenEnabled(t *testing.T) {
+	t.Cleanup(func() { RetryThrottled = false })
+	RetryThrottled = true
+
+	fe := newFetchError(StepReferrers, KindReferrersUnavailable, &transport.Error{StatusCode: http.StatusTooManyRequests})
+	assert.Equal(t, KindThrottled, fe.Kind)
+	assert.True(t, fe.Recoverable, "with -bundle-retry-throttled a 429 is recoverable again")
+}
+
+func TestRetryBundleRetriesThrottleWhenEnabled(t *testing.T) {
+	t.Cleanup(func() { RetryThrottled = false })
+	RetryThrottled = true
+
+	const maxAttempts = 3
+	var attempts int
+
+	_, _, err := retryBundle(t.Context(), maxAttempts, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		attempts++
+		return nil, nil, newBlobError(&transport.Error{StatusCode: http.StatusTooManyRequests})
+	})
+
+	assert.Equal(t, maxAttempts, attempts, "with retry-throttled enabled a 429 retries like other recoverable errors")
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindThrottled, fe.Kind)
+	assert.Equal(t, maxAttempts, fe.Attempts)
 }
 
 func TestRetryBundlePreservesStepOnCancellation(t *testing.T) {
