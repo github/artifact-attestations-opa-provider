@@ -60,4 +60,16 @@ var (
 		Help:    "The number of images (keys) included in a single provider request",
 		Buckets: []float64{1, 2, 3, 5, 10, 20, 50},
 	})
+
+	//nolint: revive
+	KeychainBuildTimer = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "aaop_keychain_build_timer",
+		Help: "The duration (seconds) to build the registry keychain",
+	})
+
+	//nolint: revive
+	KeychainRefreshFail = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "aaop_keychain_refresh_fail",
+		Help: "The total number of background keychain refreshes that failed to produce a keychain",
+	})
 )
