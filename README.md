@@ -263,6 +263,12 @@ The metrics exposed beyond the default Prometheus metrics are:
    time it takes to download the attestations from the OCI registry.
 * `aaop_attestations_verification_timer`: the duration in seconds for
   the time it takes to verify the retrieved attestations.
+* `aaop_keychain_build_timer`: the duration in seconds to build the
+  registry keychain. The keychain is built once at startup and refreshed
+  in the background, so this latency is off the request path.
+* `aaop_keychain_refresh_fail`: the total number of background keychain
+  refreshes that did not fully rebuild the keychain (a failed or degraded
+  rebuild), so the previous keychain was retained.
 
 Each request is also logged with a `request_id`, `image_count`, and, for
 per-image log lines, an `image_index` (1-based position within the

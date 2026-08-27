@@ -40,6 +40,7 @@ var (
 	tufTargets           = flag.String("tuf-targets", "", "Comma separated list of targets to load as trust roots")
 	ns                   = flag.String("namespace", "", "namespace the pod runs in")
 	ips                  = flag.String("image-pull-secret", "", "the imagePullSecret to use for private registries")
+	keychainRefresh      = flag.Duration("keychain-refresh-interval", 5*time.Minute, "how often the registry keychain is rebuilt in the background")
 	port                 = flag.String("port", "8080", "port to listen to")
 	metricsPort          = flag.String("metrics-port", "9090", "port to listen to for metrics")
 	bundleMaxAttempts    = flag.Int("bundle-max-attempts", 3, "max attempts to fetch a bundle")
@@ -158,7 +159,13 @@ func main() {
 		}
 	}
 
-	kc = authn.NewKeyChainProvider(*ns, []string{*ips})
+	// Handle signals gracefully to avoid dropping requests during Pod shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+
+	kc = authn.NewKeyChainProvider(*ns, []string{*ips}, *keychainRefresh)
+	// Build the keychain once and refresh it periodically in the background so
+	// requests never pay the keychain construction cost on their critical path.
+	kc.Start(ctx)
 	var p = provider.New(v, kc, &fetcher.DefaultBundleFetcher{})
 	var t = transport{
 		p: p,
@@ -168,9 +175,6 @@ func main() {
 	sm.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-
-	// Handle signals gracefully to avoid dropping requests during Pod shutdown
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
 	var srv = &http.Server{
 		Addr:              fmt.Sprintf(":%s", *port),
