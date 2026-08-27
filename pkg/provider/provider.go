@@ -36,7 +36,7 @@ type KeyChainProvider interface {
 
 // BundleFetcher fetches bundles from a remote OCI registry.
 type BundleFetcher interface {
-	BundleFromName(ctx context.Context, ref name.Reference, remoteOpts []remote.Option) ([]*bundle.Bundle, *v1.Hash, int, error)
+	BundleFromName(ctx context.Context, ref name.Reference, remoteOpts []remote.Option) (fetcher.BundleResult, error)
 	GetRemoteOptions(kc authn.Keychain) []remote.Option
 }
 
@@ -124,7 +124,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		start := time.Now()
-		bundles, hash, attempts, err := p.bf.BundleFromName(ctx, ref, ro)
+		result, err := p.bf.BundleFromName(ctx, ref, ro)
 		dur := time.Since(start)
 		// Record the fetch latency for both successful and failed fetches.
 		// The tail of this histogram (failed fetches timing out) is a key
@@ -133,12 +133,12 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		metrics.AttestationsPullTimer.Observe(dur.Seconds())
 
 		if err != nil {
-			reason, step, _ := fetcher.Classify(err)
+			reason, step, errAttempts := fetcher.Classify(err)
 			metrics.AttestationsRetrieveFail.WithLabelValues(reason).Inc()
 			imgLog.Error("validate: error fetching bundles",
 				"reason", reason,
 				"step", step,
-				"attempts", attempts,
+				"attempts", errAttempts,
 				"duration_s", dur.Seconds(),
 				"error", err)
 			results = append(results, externaldata.Item{
@@ -148,13 +148,13 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 			continue
 		}
 
-		metrics.AttestationsRetrieved.Add(float64(len(bundles)))
+		metrics.AttestationsRetrieved.Add(float64(len(result.Bundles)))
 		imgLog.Info("validate: fetched OCI bundles",
-			"count", len(bundles),
+			"count", len(result.Bundles),
 			"duration_s", dur.Seconds(),
-			"attempts", attempts)
+			"attempts", result.Attempts)
 
-		if len(bundles) == 0 {
+		if len(result.Bundles) == 0 {
 			metrics.AttestationsMissing.Inc()
 			imgLog.Info("validate: no bundles")
 			results = append(results, externaldata.Item{
@@ -165,18 +165,18 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		start = time.Now()
-		res, err = p.v.Verify(bundles, hash)
+		res, err = p.v.Verify(result.Bundles, result.Hash)
 		dur = time.Since(start)
 		metrics.AttestationsVerTimer.Observe(dur.Seconds())
 		metrics.AttestationsVerOk.Add(float64(len(res)))
-		var fail = len(bundles) - len(res)
+		var fail = len(result.Bundles) - len(res)
 		if fail > 0 {
 			metrics.AttestationsVerFail.Add(float64(fail))
 		}
 
 		if err != nil {
 			imgLog.Error("validate: verification error",
-				"image_digest", hash.Hex,
+				"image_digest", result.Hash.Hex,
 				"error", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: VerifyImageSignatures(%q): %v", key, err))
 		}

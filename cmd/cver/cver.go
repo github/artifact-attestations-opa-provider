@@ -131,9 +131,11 @@ func main() {
 			log.Print(err)
 		}
 		ctx := context.Background()
-		if b, h, _, err = fetcher.BundleFromName(ctx, ref, remoteOpts); err != nil {
+		var result fetcher.BundleResult
+		if result, err = fetcher.BundleFromName(ctx, ref, remoteOpts); err != nil {
 			log.Print(err)
 		}
+		b, h = result.Bundles, result.Hash
 	}
 
 	if res, err = v.Verify(b, h); err != nil {

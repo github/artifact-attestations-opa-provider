@@ -29,14 +29,14 @@ func TestRetryBundleTimesOutEachAttempt(t *testing.T) {
 	const maxAttempts = 3
 	var attempts int
 
-	_, _, finalAttempts, err := retryBundle(t.Context(), maxAttempts, 5*time.Millisecond, 0, func(ctx context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	result, err := retryBundle(t.Context(), maxAttempts, 5*time.Millisecond, 0, func(ctx context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		attempts++
 		<-ctx.Done()
 		return nil, nil, ctx.Err()
 	})
 
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Equal(t, maxAttempts, finalAttempts)
+	assert.Equal(t, maxAttempts, result.Attempts)
 }
 
 func TestRetryBundleReturnsSuccessfulAttempt(t *testing.T) {
@@ -44,7 +44,7 @@ func TestRetryBundleReturnsSuccessfulAttempt(t *testing.T) {
 	expectedHash := &v1.Hash{Algorithm: "sha256", Hex: "abc"}
 	var attempts int
 
-	bundles, hash, finalAttempts, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	result, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		attempts++
 		if attempts < 3 {
 			return nil, nil, errors.New("temporary failure")
@@ -53,23 +53,23 @@ func TestRetryBundleReturnsSuccessfulAttempt(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, attempts, finalAttempts)
-	assert.Same(t, expectedBundles[0], bundles[0])
-	assert.Same(t, expectedHash, hash)
+	assert.Equal(t, attempts, result.Attempts)
+	assert.Same(t, expectedBundles[0], result.Bundles[0])
+	assert.Same(t, expectedHash, result.Hash)
 }
 
 func TestRetryBundleStopsWhenParentIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	var attempts int
 
-	_, _, finalAttempts, err := retryBundle(ctx, 3, time.Second, time.Second, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	result, err := retryBundle(ctx, 3, time.Second, time.Second, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		attempts++
 		cancel()
 		return nil, nil, errors.New("temporary failure")
 	})
 
 	require.ErrorIs(t, err, context.Canceled)
-	assert.Equal(t, finalAttempts, attempts)
+	assert.Equal(t, result.Attempts, attempts)
 }
 
 func TestRetryBundleReturnsLastError(t *testing.T) {
@@ -77,7 +77,7 @@ func TestRetryBundleReturnsLastError(t *testing.T) {
 	lastErr := errors.New("last failure")
 	attempts := 0
 
-	_, _, finalAttempts, err := retryBundle(t.Context(), 2, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	result, err := retryBundle(t.Context(), 2, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		attempts++
 		if attempts == 1 {
 			return nil, nil, firstErr
@@ -86,8 +86,8 @@ func TestRetryBundleReturnsLastError(t *testing.T) {
 	})
 
 	require.ErrorIs(t, err, lastErr)
-	assert.NotErrorIs(t, err, firstErr)
-	assert.Equal(t, attempts, finalAttempts)
+	require.NotErrorIs(t, err, firstErr)
+	assert.Equal(t, attempts, result.Attempts)
 }
 
 func TestClassifyTransport(t *testing.T) {
@@ -241,7 +241,7 @@ func TestNewFetchErrorClassifiesThrottling(t *testing.T) {
 func TestRetryBundleFailsFastOnThrottle(t *testing.T) {
 	var attempts int
 
-	_, _, finalAttempts, err := retryBundle(t.Context(), 3, time.Second, time.Second, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	result, err := retryBundle(t.Context(), 3, time.Second, time.Second, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		attempts++
 		return nil, nil, newBlobError(&transport.Error{StatusCode: http.StatusTooManyRequests})
 	})
@@ -252,7 +252,7 @@ func TestRetryBundleFailsFastOnThrottle(t *testing.T) {
 	require.ErrorAs(t, err, &fe)
 	assert.Equal(t, KindThrottled, fe.Kind)
 	assert.Equal(t, 1, fe.Attempts)
-	assert.Equal(t, fe.Attempts, finalAttempts)
+	assert.Equal(t, fe.Attempts, result.Attempts)
 }
 
 func TestNewFetchErrorRetriesThrottlingWhenEnabled(t *testing.T) {
@@ -271,7 +271,7 @@ func TestRetryBundleRetriesThrottleWhenEnabled(t *testing.T) {
 	const maxAttempts = 3
 	var attempts int
 
-	_, _, finalAttempts, err := retryBundle(t.Context(), maxAttempts, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	result, err := retryBundle(t.Context(), maxAttempts, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		attempts++
 		return nil, nil, newBlobError(&transport.Error{StatusCode: http.StatusTooManyRequests})
 	})
@@ -282,13 +282,13 @@ func TestRetryBundleRetriesThrottleWhenEnabled(t *testing.T) {
 	require.ErrorAs(t, err, &fe)
 	assert.Equal(t, KindThrottled, fe.Kind)
 	assert.Equal(t, maxAttempts, fe.Attempts)
-	assert.Equal(t, finalAttempts, attempts)
+	assert.Equal(t, result.Attempts, attempts)
 }
 
 func TestRetryBundlePreservesStepOnCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 
-	_, _, _, err := retryBundle(ctx, 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	_, err := retryBundle(ctx, 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		cancel()
 		return nil, nil, newReferrersError(errors.New("boom"))
 	})
@@ -302,7 +302,7 @@ func TestRetryBundlePreservesStepOnCancellation(t *testing.T) {
 func TestRetryBundleTimeoutSetsAttemptsAndReason(t *testing.T) {
 	const maxAttempts = 3
 
-	_, _, _, err := retryBundle(t.Context(), maxAttempts, 5*time.Millisecond, 0, func(ctx context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	_, err := retryBundle(t.Context(), maxAttempts, 5*time.Millisecond, 0, func(ctx context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		<-ctx.Done()
 		return nil, nil, newFetchError(StepDescriptor, KindDescriptorError, ctx.Err())
 	})
@@ -316,7 +316,7 @@ func TestRetryBundleTimeoutSetsAttemptsAndReason(t *testing.T) {
 func TestRetryBundleStopsOnNonRecoverableFetchError(t *testing.T) {
 	var attempts int
 
-	_, _, finalAttempts, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	result, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		attempts++
 		return nil, nil, &FetchError{Step: StepDescriptor, Kind: KindUnauthorized, Recoverable: false, Err: errors.New("401")}
 	})
@@ -324,14 +324,14 @@ func TestRetryBundleStopsOnNonRecoverableFetchError(t *testing.T) {
 	var fe *FetchError
 	require.ErrorAs(t, err, &fe)
 	assert.Equal(t, KindUnauthorized, fe.Kind)
-	assert.Equal(t, 1, finalAttempts)
+	assert.Equal(t, 1, result.Attempts)
 	assert.Equal(t, 1, fe.Attempts)
 }
 
 func TestRetryBundleStopsOnNotFound(t *testing.T) {
 	var attempts int
 
-	_, _, finalAttempts, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	result, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		attempts++
 		return nil, nil, newDescriptorError(&transport.Error{StatusCode: http.StatusNotFound})
 	})
@@ -340,7 +340,7 @@ func TestRetryBundleStopsOnNotFound(t *testing.T) {
 	require.ErrorAs(t, err, &fe)
 	assert.Equal(t, KindNotFound, fe.Kind)
 	assert.Equal(t, http.StatusNotFound, fe.StatusCode)
-	assert.Equal(t, 1, finalAttempts, "a 404 must not be retried")
+	assert.Equal(t, 1, result.Attempts, "a 404 must not be retried")
 	assert.Equal(t, 1, fe.Attempts)
 }
 
