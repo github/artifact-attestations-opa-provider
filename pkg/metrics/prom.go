@@ -70,6 +70,6 @@ var (
 	//nolint: revive
 	KeychainRefreshFail = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "aaop_keychain_refresh_fail",
-		Help: "The total number of background keychain refreshes that failed to produce a keychain",
+		Help: "The total number of background keychain refreshes that failed or were degraded (did not fully rebuild the keychain), leaving the previous keychain in place",
 	})
 )
