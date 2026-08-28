@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http/httptrace"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -124,7 +125,17 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		start := time.Now()
-		bundles, hash, err := p.bf.BundleFromName(ctx, ref, ro)
+		// Attach a connection trace so that, if the fetch fails, the failure
+		// line can report which connection phase (DNS, connect, TLS, reuse, or
+		// time-to-first-byte) the request stalled in. The trace rides on the
+		// context, so it propagates to every registry call across retries.
+		fctx := ctx
+		var tc *fetcher.TraceCollector
+		if fetcher.TraceEnabled {
+			tc = fetcher.NewTraceCollector()
+			fctx = httptrace.WithClientTrace(ctx, tc.Trace())
+		}
+		bundles, hash, err := p.bf.BundleFromName(fctx, ref, ro)
 		dur := time.Since(start)
 		// Record the fetch latency for both successful and failed fetches.
 		// The tail of this histogram (failed fetches timing out) is a key
@@ -135,12 +146,19 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		if err != nil {
 			reason, step, attempts := fetcher.Classify(err)
 			metrics.AttestationsRetrieveFail.WithLabelValues(reason).Inc()
-			imgLog.Error("validate: error fetching bundles",
+			// The connection-phase fields ride on the existing failure line, so
+			// there is no added log volume on the success path.
+			fields := []any{
 				"reason", reason,
 				"step", step,
 				"attempts", attempts,
 				"duration_s", dur.Seconds(),
-				"error", err)
+				"error", err,
+			}
+			if tc != nil {
+				fields = append(fields, tc.Fields()...)
+			}
+			imgLog.Error("validate: error fetching bundles", fields...)
 			results = append(results, externaldata.Item{
 				Key:   key,
 				Error: "error_fetching_bundle_" + reason,
