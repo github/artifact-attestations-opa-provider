@@ -152,6 +152,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				"reason", reason,
 				"step", step,
 				"attempts", errAttempts,
+				"attempt_trail", fetcher.AttemptTrail(err),
 				"duration_s", dur.Seconds(),
 				"error", err,
 			}

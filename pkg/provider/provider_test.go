@@ -494,3 +494,54 @@ func TestValidateOmitsTraceFieldsWhenDisabled(t *testing.T) {
 	// The pre-existing failure fields are still present.
 	assert.Equal(t, "timeout", fetchErr["reason"])
 }
+
+// trailFetcher always fails with a FetchError that carries a per-attempt trail,
+// so the provider's failure-logging path can be asserted to surface it.
+type trailFetcher struct {
+	mockBundleFetcher
+}
+
+func (*trailFetcher) BundleFromName(_ context.Context, _ name.Reference, _ []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
+	return nil, nil, &fetcher.FetchError{
+		Step:     fetcher.StepDescriptor,
+		Kind:     fetcher.KindCanceled,
+		Attempts: 3,
+		Trail: []fetcher.AttemptOutcome{
+			{Reason: fetcher.KindTimeout, Step: fetcher.StepDescriptor},
+			{Reason: fetcher.KindTimeout, Step: fetcher.StepDescriptor},
+			{Reason: fetcher.KindCanceled, Step: fetcher.StepDescriptor},
+		},
+		Recoverable: false,
+		Err:         context.Canceled,
+	}
+}
+
+// TestValidateLogsAttemptTrailOnFailure verifies the provider surfaces the
+// per-attempt trail on the fetch failure line, so a terminal cancellation does
+// not hide the establishment timeouts that preceded it.
+func TestValidateLogsAttemptTrailOnFailure(t *testing.T) {
+	v := &mockVerifier{}
+	kc := &mockKeyChainProvider{}
+	bf := &trailFetcher{}
+	provider := New(v, kc, bf)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(prev)
+
+	request := &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{validImageName},
+		},
+	}
+	provider.Validate(context.Background(), request)
+
+	fetchErr := lastLogLine(t, &buf, "validate: error fetching bundles")
+	require.NotNil(t, fetchErr, "expected a fetch error log line")
+	// The terminal reason stays honest, and the trail rides alongside it.
+	assert.Equal(t, "canceled", fetchErr["reason"])
+	assert.Equal(t, "timeout:descriptor,timeout:descriptor,canceled:descriptor", fetchErr["attempt_trail"])
+}
