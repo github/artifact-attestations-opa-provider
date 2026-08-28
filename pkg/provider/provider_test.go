@@ -95,21 +95,25 @@ func (*mockKeyChainProvider) KeyChain(_ context.Context) (authn.Keychain, error)
 type mockBundleFetcher struct {
 }
 
-func (*mockBundleFetcher) BundleFromName(_ context.Context, ref name.Reference, _ []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
+func (*mockBundleFetcher) BundleFromName(_ context.Context, ref name.Reference, _ []remote.Option) (fetcher.BundleResult, error) {
 	if mb, ok := bundles[ref.Name()]; ok {
 		var b bundle.Bundle
 		err := b.UnmarshalJSON([]byte(mb.bundle))
 		if err != nil {
-			return nil, nil, err
+			return fetcher.BundleResult{Attempts: 1}, err
 		}
 		h := v1.Hash{
 			Algorithm: "sha256",
 			Hex:       mb.hash,
 		}
-		return []*bundle.Bundle{&b}, &h, nil
+		return fetcher.BundleResult{
+			Bundles:  []*bundle.Bundle{&b},
+			Hash:     &h,
+			Attempts: 1,
+		}, nil
 	}
 
-	return nil, nil, nil
+	return fetcher.BundleResult{Attempts: 1}, nil
 }
 
 func (*mockBundleFetcher) GetRemoteOptions(_ authn.Keychain) []remote.Option {
@@ -255,8 +259,8 @@ type notFoundBundleFetcher struct {
 	mockBundleFetcher
 }
 
-func (*notFoundBundleFetcher) BundleFromName(_ context.Context, _ name.Reference, _ []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
-	return nil, nil, &fetcher.FetchError{
+func (*notFoundBundleFetcher) BundleFromName(_ context.Context, _ name.Reference, _ []remote.Option) (fetcher.BundleResult, error) {
+	return fetcher.BundleResult{Attempts: 1}, &fetcher.FetchError{
 		Step:        fetcher.StepDescriptor,
 		Kind:        fetcher.KindNotFound,
 		Attempts:    1,
@@ -323,8 +327,8 @@ func TestValidateRecordsImageCount(t *testing.T) {
 }
 
 // TestValidateLogsImageContext verifies that per-image log lines carry the
-// request-scoped context (request_id, image_count, image_index) so a failed
-// image fetch can be traced back to a solo vs. multi-image request.
+// request-scoped context (request_id, image_count, image_index, attempts) so
+// a failed image fetch can be traced back to a solo vs. multi-image request.
 func TestValidateLogsImageContext(t *testing.T) {
 	v := &mockVerifier{}
 	kc := &mockKeyChainProvider{}
@@ -371,6 +375,7 @@ func TestValidateLogsImageContext(t *testing.T) {
 	// fetchErr is the last "error fetching bundles" line, i.e. the second
 	// image, so its 1-based image_index must be 2.
 	assert.InDelta(t, 2.0, fetchErr["image_index"], 0.0001, "failure line should report the 1-based image position")
+	assert.InDelta(t, 1.0, fetchErr["attempts"], 0.0001, "failure line should report the fetch attempt count")
 	assert.Equal(t, entry["request_id"], fetchErr["request_id"],
 		"per-image failure line should carry the request's correlation id")
 }
@@ -383,9 +388,9 @@ type traceProbeFetcher struct {
 	sawTrace bool
 }
 
-func (f *traceProbeFetcher) BundleFromName(ctx context.Context, _ name.Reference, _ []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
+func (f *traceProbeFetcher) BundleFromName(ctx context.Context, _ name.Reference, _ []remote.Option) (fetcher.BundleResult, error) {
 	f.sawTrace = httptrace.ContextClientTrace(ctx) != nil
-	return nil, nil, &fetcher.FetchError{
+	return fetcher.BundleResult{Attempts: 3}, &fetcher.FetchError{
 		Step:        fetcher.StepDescriptor,
 		Kind:        fetcher.KindTimeout,
 		Attempts:    3,
