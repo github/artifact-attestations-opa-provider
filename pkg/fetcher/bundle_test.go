@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -343,6 +344,232 @@ func TestRetryBundleStopsOnNotFound(t *testing.T) {
 	assert.Equal(t, 1, result.Attempts, "a 404 must not be retried")
 	assert.Equal(t, 1, fe.Attempts)
 }
+
+func TestRetryBundleTrailDeMasksTerminalCancellation(t *testing.T) {
+	// Two establishment stalls (recoverable timeout on the descriptor GET),
+	// then the parent context is canceled partway through the third attempt.
+	// The terminal reason stays the honest "canceled", but the trail must
+	// preserve the two prior timeouts that reason alone would mask.
+	ctx, cancel := context.WithCancel(t.Context())
+	var attempts int
+
+	result, err := retryBundle(ctx, 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, nil, newDescriptorError(context.DeadlineExceeded)
+		}
+		cancel()
+		return nil, nil, newDescriptorError(context.Canceled)
+	})
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindCanceled, fe.Kind, "terminal reason stays the true final state")
+	assert.Equal(t, StepDescriptor, fe.Step)
+	assert.Equal(t, 3, fe.Attempts)
+	require.Len(t, fe.Trail, 3)
+	assert.Equal(t, AttemptOutcome{Reason: KindTimeout, Step: StepDescriptor}, fe.Trail[0])
+	assert.Equal(t, AttemptOutcome{Reason: KindTimeout, Step: StepDescriptor}, fe.Trail[1])
+	assert.Equal(t, AttemptOutcome{Reason: KindCanceled, Step: StepDescriptor}, fe.Trail[2])
+	assert.Equal(t, "timeout:descriptor,timeout:descriptor,canceled:descriptor", AttemptTrail(err))
+	assert.Len(t, fe.Trail, fe.Attempts, "len(Trail) == Attempts")
+	assert.Equal(t, fe.Attempts, result.Attempts, "BundleResult.Attempts agrees with FetchError.Attempts")
+}
+
+func TestRetryBundleTrailRecordsExhaustedRetries(t *testing.T) {
+	const maxAttempts = 3
+
+	result, err := retryBundle(t.Context(), maxAttempts, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		return nil, nil, newReferrersError(errors.New("boom"))
+	})
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindReferrersUnavailable, fe.Kind, "terminal reason is the last attempt's reason")
+	assert.Equal(t, maxAttempts, fe.Attempts)
+	require.Len(t, fe.Trail, maxAttempts)
+	for i, o := range fe.Trail {
+		assert.Equal(t, AttemptOutcome{Reason: KindReferrersUnavailable, Step: StepReferrers}, o, "attempt %d", i)
+	}
+	assert.Len(t, fe.Trail, fe.Attempts, "len(Trail) == Attempts")
+	assert.Equal(t, fe.Attempts, result.Attempts, "BundleResult.Attempts agrees with FetchError.Attempts")
+}
+
+func TestRetryBundleTrailStopsOnNonRecoverable(t *testing.T) {
+	var attempts int
+
+	result, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		attempts++
+		return nil, nil, newFetchError(StepDescriptor, KindDescriptorError, &transport.Error{StatusCode: http.StatusUnauthorized})
+	})
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, 1, attempts, "a non-recoverable error must not be retried")
+	assert.Equal(t, KindUnauthorized, fe.Kind)
+	require.Len(t, fe.Trail, 1)
+	assert.Equal(t, AttemptOutcome{Reason: KindUnauthorized, Step: StepDescriptor}, fe.Trail[0])
+	assert.Equal(t, "unauthorized:descriptor", AttemptTrail(err))
+	assert.Len(t, fe.Trail, fe.Attempts, "len(Trail) == Attempts")
+	assert.Equal(t, fe.Attempts, result.Attempts, "BundleResult.Attempts agrees with FetchError.Attempts")
+}
+
+func TestRetryBundleTrailCarriesPriorAttemptsOnDelayCancel(t *testing.T) {
+	// Drive the delay-branch cancel deterministically instead of racing a
+	// wall-clock timer: retryBundle emits its per-attempt debug log immediately
+	// before the inter-attempt delay select, so a handler that cancels the
+	// parent on that log guarantees the next select observes cancellation. The
+	// handler runs synchronously in retryBundle's own goroutine, so there is no
+	// timing dependency. The terminal error is the delay-branch cancel (no
+	// in-flight step) but must still carry the first attempt's outcome.
+	ctx, cancel := context.WithCancel(t.Context())
+	prev := slog.Default()
+	slog.SetDefault(slog.New(&cancelOnMessage{msg: "bundle fetch attempt failed", cancel: cancel}))
+	defer slog.SetDefault(prev)
+
+	var attempts int
+	// A long delay so the select can only return via the (already canceled)
+	// parent, never the timer; if the debug hook ever stops firing the test
+	// fails fast on assertions rather than hanging on the timer.
+	_, err := retryBundle(ctx, 3, time.Second, 5*time.Second, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		attempts++
+		return nil, nil, newDescriptorError(context.DeadlineExceeded)
+	})
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, 1, attempts, "cancel during the delay must stop before a second attempt")
+	assert.Equal(t, KindCanceled, fe.Kind)
+	assert.Empty(t, fe.Step, "the delay-branch cancel has no in-flight step")
+	assert.Equal(t, 1, fe.Attempts)
+	require.Len(t, fe.Trail, 1)
+	assert.Equal(t, AttemptOutcome{Reason: KindTimeout, Step: StepDescriptor}, fe.Trail[0])
+	assert.Equal(t, "timeout:descriptor", AttemptTrail(err))
+	assert.Len(t, fe.Trail, fe.Attempts, "len(Trail) == Attempts")
+}
+
+func TestRetryBundleTrailClassifiesNonFetchErrors(t *testing.T) {
+	// An attempt may return a raw (non-*FetchError) error, e.g. ctx.Err()
+	// directly. The trail must classify it the same way the terminal error is
+	// classified rather than recording it as "unknown".
+	const maxAttempts = 3
+
+	result, err := retryBundle(t.Context(), maxAttempts, 5*time.Millisecond, 0, func(ctx context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		<-ctx.Done()
+		return nil, nil, ctx.Err()
+	})
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindTimeout, fe.Kind, "terminal reason is classified from the raw error")
+	require.Len(t, fe.Trail, maxAttempts)
+	for i, o := range fe.Trail {
+		assert.Equal(t, KindTimeout, o.Reason, "attempt %d trail must match the terminal reason, not unknown", i)
+		assert.Empty(t, o.Step, "a raw attempt error carries no fetch step")
+	}
+	// A stepless outcome renders as just its reason (no trailing separator).
+	assert.Equal(t, "timeout,timeout,timeout", AttemptTrail(err))
+	assert.Len(t, fe.Trail, fe.Attempts, "len(Trail) == Attempts")
+	assert.Equal(t, fe.Attempts, result.Attempts, "BundleResult.Attempts agrees with FetchError.Attempts")
+}
+
+func TestRetryBundleSuccessCarriesPriorFailureTrail(t *testing.T) {
+	// A fetch that fails twice recoverably then succeeds must surface the two
+	// prior failures on the successful result, so a retry-rescued success does
+	// not silently hide them. The winning attempt is not itself a failure, so
+	// len(Trail) == Attempts-1.
+	expectedBundles := []*bundle.Bundle{{}}
+	expectedHash := &v1.Hash{Algorithm: "sha256", Hex: "abc"}
+	var attempts int
+
+	result, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, nil, newDescriptorError(context.DeadlineExceeded)
+		}
+		return expectedBundles, expectedHash, nil
+	})
+
+	require.NoError(t, err)
+	assert.Same(t, expectedBundles[0], result.Bundles[0])
+	assert.Same(t, expectedHash, result.Hash)
+	assert.Equal(t, 3, result.Attempts)
+	require.Len(t, result.Trail, 2)
+	assert.Equal(t, AttemptOutcome{Reason: KindTimeout, Step: StepDescriptor}, result.Trail[0])
+	assert.Equal(t, AttemptOutcome{Reason: KindTimeout, Step: StepDescriptor}, result.Trail[1])
+	assert.Equal(t, "timeout:descriptor,timeout:descriptor", result.AttemptTrail())
+	assert.Len(t, result.Trail, result.Attempts-1, "len(Trail) == Attempts-1 on success")
+}
+
+func TestRetryBundleFirstAttemptSuccessHasEmptyTrail(t *testing.T) {
+	// The common case: a first-attempt success records no prior failures, so
+	// the trail is empty and renders to nothing (the provider omits the field).
+	result, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		return []*bundle.Bundle{{}}, &v1.Hash{Algorithm: "sha256", Hex: "abc"}, nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Attempts)
+	assert.Empty(t, result.Trail)
+	assert.Empty(t, result.AttemptTrail())
+}
+
+func TestAttemptTrail(t *testing.T) {
+	// A non-*FetchError carries no trail.
+	assert.Empty(t, AttemptTrail(errors.New("boom")))
+	// A *FetchError with no recorded trail renders empty.
+	assert.Empty(t, AttemptTrail(&FetchError{Kind: KindCanceled}))
+
+	// Outcomes render as ordered "reason:step" tokens, oldest first.
+	fe := &FetchError{Trail: []AttemptOutcome{
+		{Reason: KindTimeout, Step: StepDescriptor},
+		{Reason: KindCanceled, Step: StepReferrers},
+	}}
+	assert.Equal(t, "timeout:descriptor,canceled:referrers", AttemptTrail(fe))
+	// A wrapped *FetchError is still rendered.
+	assert.Equal(t, "timeout:descriptor,canceled:referrers", AttemptTrail(fmt.Errorf("wrapped: %w", fe)))
+
+	// A missing reason falls back to "unknown" so the token is never bare.
+	assert.Equal(t, "unknown:blob", AttemptTrail(&FetchError{Trail: []AttemptOutcome{{Step: StepBlob}}}))
+
+	// A stepless outcome renders as just its reason, with no trailing separator.
+	assert.Equal(t, "timeout,canceled", AttemptTrail(&FetchError{Trail: []AttemptOutcome{
+		{Reason: KindTimeout},
+		{Reason: KindCanceled},
+	}}))
+
+	// BundleResult.AttemptTrail renders its prior-failure trail the same way,
+	// and is empty when there were no prior failures.
+	assert.Empty(t, BundleResult{Attempts: 1}.AttemptTrail())
+	assert.Equal(t, "timeout:descriptor,timeout:descriptor", BundleResult{Attempts: 3, Trail: []AttemptOutcome{
+		{Reason: KindTimeout, Step: StepDescriptor},
+		{Reason: KindTimeout, Step: StepDescriptor},
+	}}.AttemptTrail())
+}
+
+// cancelOnMessage is a slog.Handler that invokes cancel whenever it sees a
+// record with the given message. retryBundle logs each retryable attempt
+// failure immediately before the inter-attempt delay select, so canceling from
+// this handler deterministically steers the loop into the delay-branch cancel
+// path without depending on wall-clock timing. Handle runs synchronously in the
+// caller's goroutine.
+type cancelOnMessage struct {
+	msg    string
+	cancel context.CancelFunc
+}
+
+func (*cancelOnMessage) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *cancelOnMessage) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == h.msg {
+		h.cancel()
+	}
+	return nil
+}
+
+func (h *cancelOnMessage) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *cancelOnMessage) WithGroup(string) slog.Handler { return h }
 
 func TestResolveTransportTimeoutsDerivesFromBudget(t *testing.T) {
 	// With no overrides, each phase is a fraction of the per-attempt budget.

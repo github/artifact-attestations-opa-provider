@@ -238,14 +238,28 @@ const (
 	StepDecode Step = "decode"
 )
 
+// AttemptOutcome is the classified result of a single fetch attempt. A slice of
+// these records the per-attempt history behind a retried fetch so a terminal
+// failure can report the outcomes that preceded it, not just the final one.
+type AttemptOutcome struct {
+	Reason FailureKind
+	Step   Step
+}
+
 // FetchError is a structured error describing a failed attempt to fetch a
 // bundle from an OCI registry. It records which Step failed, a stable failure
 // Kind, how many attempts were made, and (when known) the HTTP StatusCode, so
 // callers can log, categorize, and emit metrics without parsing error strings.
 type FetchError struct {
-	Step        Step
-	Kind        FailureKind
-	Attempts    int
+	Step     Step
+	Kind     FailureKind
+	Attempts int
+	// Trail is the classified outcome of every attempt, oldest first. It is
+	// additive to the terminal Kind/Step: when a retried fetch is cut short by
+	// a parent cancellation or deadline, the terminal reason alone hides the
+	// per-attempt failures that came before it, so Trail preserves them.
+	// len(Trail) == Attempts on every attempt-driven failure path.
+	Trail       []AttemptOutcome
 	StatusCode  int
 	Recoverable bool
 	Err         error
@@ -268,6 +282,20 @@ type BundleResult struct {
 	Bundles  []*bundle.Bundle
 	Hash     *v1.Hash
 	Attempts int
+	// Trail is the classified outcome of every attempt that failed before this
+	// result succeeded, oldest first. It is populated on the success path so a
+	// retry-rescued fetch can report the failures its final attempt masked;
+	// it is empty for a first-attempt success (len(Trail) == Attempts-1 on
+	// success). A failed fetch carries its trail on the returned *FetchError
+	// instead (see FetchError.Trail), so this stays empty there.
+	Trail []AttemptOutcome
+}
+
+// AttemptTrail renders this result's pre-success failure outcomes as the same
+// compact, ordered "reason:step" string produced for the failure path (see the
+// AttemptTrail function). It is the empty string for a first-attempt success.
+func (r BundleResult) AttemptTrail() string {
+	return formatAttemptTrail(r.Trail)
 }
 
 // BundleFromName fetches a sigstore bundle for a container from the OCI
@@ -294,6 +322,10 @@ type bundleAttempt func(context.Context) ([]*bundle.Bundle, *v1.Hash, error)
 func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Duration, attempt bundleAttempt) (BundleResult, error) {
 	var lastErr error
 	var attempts int
+	// outcomes accumulates one entry per completed attempt, oldest first, and is
+	// attached to every failure return path so the terminal error carries the
+	// full per-attempt history (len(outcomes) == attempts on those paths).
+	var outcomes []AttemptOutcome
 
 	for i := 0; i < maxAttempts; i++ {
 		if i > 0 && delay > 0 {
@@ -304,6 +336,7 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 				return BundleResult{Attempts: attempts}, &FetchError{
 					Kind:        kindFromContext(ctx.Err()),
 					Attempts:    attempts,
+					Trail:       outcomes,
 					Recoverable: false,
 					Err:         ctx.Err(),
 				}
@@ -318,32 +351,46 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 		b, h, err := attempt(ictx)
 		cancel()
 		if err == nil {
+			// outcomes here holds exactly the attempts that failed before this
+			// one; the winning attempt is never appended, so a first-attempt
+			// success carries an empty trail.
 			return BundleResult{
 				Bundles:  b,
 				Hash:     h,
 				Attempts: attempts,
+				Trail:    outcomes,
 			}, nil
 		}
 		lastErr = err
+
+		// Record this attempt's classified outcome before any early return so
+		// the terminal error carries the reason for every attempt, not just the
+		// last. kind/step are reused by the debug log below. Non-*FetchError
+		// attempt errors are classified here too so the trail matches the
+		// terminal reason instead of collapsing to "unknown".
+		kind, step := classifyAttempt(err)
+		outcomes = append(outcomes, AttemptOutcome{Reason: kind, Step: step})
 
 		// Stop early on errors that a retry cannot fix (auth, invalid
 		// bundle). Record how many attempts we made for observability.
 		var fe *FetchError
 		if errors.As(err, &fe) && !fe.Recoverable {
 			fe.Attempts = attempts
+			fe.Trail = outcomes
 			return BundleResult{Attempts: attempts}, fe
 		}
 		if cerr := ctx.Err(); cerr != nil {
 			// Preserve the step from the in-flight attempt (if any) so
 			// cancellation failures still report where they occurred.
-			var step Step
+			var cstep Step
 			if fe != nil {
-				step = fe.Step
+				cstep = fe.Step
 			}
 			return BundleResult{Attempts: attempts}, &FetchError{
-				Step:        step,
+				Step:        cstep,
 				Kind:        kindFromContext(cerr),
 				Attempts:    attempts,
+				Trail:       outcomes,
 				Recoverable: false,
 				Err:         cerr,
 			}
@@ -351,16 +398,15 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 
 		// Log each retryable attempt failure at debug level so an operator
 		// can dig into the individual failures behind a retried fetch.
-		reason, step, _ := Classify(err)
 		slog.Debug("bundle fetch attempt failed",
 			"attempt", attempts,
 			"max_attempts", maxAttempts,
-			"reason", reason,
-			"step", step,
+			"reason", string(kind),
+			"step", string(step),
 			"error", err)
 	}
 
-	return BundleResult{Attempts: attempts}, finalizeFetchError(lastErr, attempts)
+	return BundleResult{Attempts: attempts}, finalizeFetchError(lastErr, attempts, outcomes)
 }
 
 // DoBundleFromName fetches a sigstore bundle for a container from
@@ -524,6 +570,25 @@ func classifyTransport(err error) (FailureKind, int) {
 	return KindUnknown, 0
 }
 
+// classifyAttempt derives a single attempt's outcome (reason and step) for the
+// per-attempt trail. A *FetchError already carries both. Any other error (a raw
+// context or transport error, e.g. an attempt that returns ctx.Err() directly)
+// is run through classifyTransport so its reason is accurate — matching how
+// finalizeFetchError classifies the same terminal error — rather than being
+// recorded as "unknown". Such raw errors carry no fetch step.
+func classifyAttempt(err error) (FailureKind, Step) {
+	var fe *FetchError
+	if errors.As(err, &fe) {
+		kind := fe.Kind
+		if kind == "" {
+			kind = KindUnknown
+		}
+		return kind, fe.Step
+	}
+	kind, _ := classifyTransport(err)
+	return kind, ""
+}
+
 // kindFromContext classifies a context error.
 func kindFromContext(err error) FailureKind {
 	switch {
@@ -537,8 +602,9 @@ func kindFromContext(err error) FailureKind {
 }
 
 // finalizeFetchError normalizes the error returned after all attempts are
-// exhausted into a FetchError carrying the total number of attempts.
-func finalizeFetchError(err error, attempts int) error {
+// exhausted into a FetchError carrying the total number of attempts and the
+// per-attempt outcome trail.
+func finalizeFetchError(err error, attempts int, outcomes []AttemptOutcome) error {
 	if err == nil {
 		// Defensive: this is only reached when the retry loop ran zero
 		// iterations (maxAttempts < 1), so no attempt was ever made.
@@ -551,6 +617,7 @@ func finalizeFetchError(err error, attempts int) error {
 	var fe *FetchError
 	if errors.As(err, &fe) {
 		fe.Attempts = attempts
+		fe.Trail = outcomes
 		return fe
 	}
 	kind, code := classifyTransport(err)
@@ -558,6 +625,7 @@ func finalizeFetchError(err error, attempts int) error {
 		Kind:        kind,
 		StatusCode:  code,
 		Attempts:    attempts,
+		Trail:       outcomes,
 		Recoverable: true,
 		Err:         err,
 	}
@@ -576,6 +644,45 @@ func Classify(err error) (reason string, step string, attempts int) {
 		return reason, string(fe.Step), fe.Attempts
 	}
 	return string(KindUnknown), "", 0
+}
+
+// AttemptTrail renders a fetch error's per-attempt outcomes as a compact,
+// ordered, low-cardinality string of "reason:step" tokens joined by commas
+// (e.g. "timeout:descriptor,timeout:descriptor,canceled:descriptor"), oldest
+// attempt first. An outcome with no fetch step (a raw context/transport error)
+// renders as just its reason. It returns the empty string when err is not a
+// *FetchError or carries no recorded trail. The tokens reuse the same stable,
+// low-cardinality reason/step values as the terminal fields, so the result is
+// safe as a log field; it must not be used as a metric label.
+func AttemptTrail(err error) string {
+	var fe *FetchError
+	if !errors.As(err, &fe) {
+		return ""
+	}
+	return formatAttemptTrail(fe.Trail)
+}
+
+// formatAttemptTrail renders a sequence of per-attempt outcomes as the compact
+// "reason:step" string documented on AttemptTrail. It is shared by the failure
+// path (FetchError.Trail via AttemptTrail) and the success path
+// (BundleResult.Trail via BundleResult.AttemptTrail).
+func formatAttemptTrail(outcomes []AttemptOutcome) string {
+	if len(outcomes) == 0 {
+		return ""
+	}
+	tokens := make([]string, len(outcomes))
+	for i, o := range outcomes {
+		reason := string(o.Reason)
+		if reason == "" {
+			reason = string(KindUnknown)
+		}
+		if o.Step == "" {
+			tokens[i] = reason
+			continue
+		}
+		tokens[i] = reason + ":" + string(o.Step)
+	}
+	return strings.Join(tokens, ",")
 }
 
 // GetRemoteOptions returns the options to provide when accessing remote
