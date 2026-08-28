@@ -3,6 +3,7 @@ package fetcher
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
@@ -12,6 +13,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// errBrokenPipe is a stand-in for a request-write failure surfaced through
+// httptrace.WroteRequestInfo.Err.
+var errBrokenPipe = errors.New("broken pipe")
 
 // fieldMap turns the flat key/value slice returned by Fields into a map so a
 // test can look a field up by name.
@@ -64,6 +69,54 @@ func TestTraceCollectorReusedConnectionNeverReturnsFirstByte(t *testing.T) {
 	assert.Equal(t, int64(8000), asInt64(t, f["last_conn_idle_ms"]))
 	assert.Equal(t, true, f["wrote_request"])
 	assert.Equal(t, int64(-1), asInt64(t, f["ttfb_ms"]))
+	// A reused connection skips DNS/connect/TLS entirely, which must read as
+	// "not observed" (-1) rather than a real zero-duration phase.
+	assert.Equal(t, int64(-1), asInt64(t, f["dns_ms"]))
+	assert.Equal(t, int64(-1), asInt64(t, f["connect_ms"]))
+	assert.Equal(t, int64(-1), asInt64(t, f["tls_ms"]))
+}
+
+// TestTraceCollectorClearsPriorConnectionOnNewRequest verifies that a request
+// which fails during establishment (GetConn but no GotConn) does not inherit
+// the previous request's reuse state, so the failure line cannot claim a
+// connection was reused when the failing dial was fresh.
+func TestTraceCollectorClearsPriorConnectionOnNewRequest(t *testing.T) {
+	c := NewTraceCollector()
+	tr := c.Trace()
+
+	// First request: a reused connection that completes.
+	tr.GetConn("registry.example:443")
+	tr.GotConn(httptrace.GotConnInfo{Reused: true, IdleTime: 5 * time.Second})
+	tr.GotFirstResponseByte()
+
+	// Second request: acquires a connection slot but fails before GotConn
+	// (for example, a fresh dial that never connects).
+	tr.GetConn("registry.example:443")
+
+	f := fieldMap(t, c.Fields())
+	assert.Equal(t, false, f["last_conn_reused"],
+		"stale reuse state from the prior request must be cleared at GetConn")
+	assert.Equal(t, int64(0), asInt64(t, f["last_conn_idle_ms"]))
+	assert.Equal(t, int64(-1), asInt64(t, f["ttfb_ms"]),
+		"a request that never received a byte must not inherit the prior ttfb")
+	// The fetch-level reuse count still reflects the first, completed request.
+	assert.Equal(t, 1, asInt(t, f["conns_reused"]))
+}
+
+// TestTraceCollectorIgnoresFailedRequestWrite verifies that a WroteRequest hook
+// carrying an error does not set wrote_request, so a write failure is not
+// misreported as the black-hole signature (request written, no response).
+func TestTraceCollectorIgnoresFailedRequestWrite(t *testing.T) {
+	c := NewTraceCollector()
+	tr := c.Trace()
+
+	tr.GetConn("registry.example:443")
+	tr.GotConn(httptrace.GotConnInfo{Reused: false})
+	tr.WroteRequest(httptrace.WroteRequestInfo{Err: errBrokenPipe})
+
+	f := fieldMap(t, c.Fields())
+	assert.Equal(t, false, f["wrote_request"],
+		"a failed request write must not be recorded as written")
 }
 
 // TestTraceCollectorFreshDialRecordsPhaseDurations drives the establishment

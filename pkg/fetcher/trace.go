@@ -17,6 +17,12 @@ var TraceEnabled = true
 // durations, which are always non-negative.
 const notRecorded int64 = -1
 
+// durationUnset marks a phase timing that has not been observed. It is negative
+// so Fields can distinguish an unobserved phase (for example, the
+// DNS/connect/TLS phases that are skipped when a pooled connection is reused)
+// from a phase that completed in under a millisecond, which rounds to zero.
+const durationUnset = time.Duration(-1)
+
 // TraceCollector accumulates HTTP connection-phase timings for one bundle
 // fetch. A fetch issues several requests (and retries); the collector keeps
 // per-fetch counts plus the phase timings of the most recently used
@@ -46,10 +52,17 @@ type TraceCollector struct {
 }
 
 // NewTraceCollector returns a TraceCollector ready to instrument one fetch. The
-// time-to-first-byte starts at -1 so a fetch that never receives a response
-// byte is distinguishable from one that received it instantly.
+// phase timings start at the unset sentinel so a phase that never runs (for
+// example, time-to-first-byte on a black-holed connection, or DNS/connect/TLS
+// on a reused one) is distinguishable from one that completed in under a
+// millisecond.
 func NewTraceCollector() *TraceCollector {
-	return &TraceCollector{ttfb: -1}
+	return &TraceCollector{
+		dns:     durationUnset,
+		connect: durationUnset,
+		tls:     durationUnset,
+		ttfb:    durationUnset,
+	}
 }
 
 // Trace returns a ClientTrace whose hooks record connection-phase timings into
@@ -58,12 +71,20 @@ func (c *TraceCollector) Trace() *httptrace.ClientTrace {
 	return &httptrace.ClientTrace{
 		GetConn: func(string) {
 			c.mu.Lock()
-			c.ttfb = -1
+			// Reset every per-request field so a stall in this request is never
+			// described with a prior request's connection state. Unobserved
+			// phases use durationUnset (not zero) so "skipped" stays distinct
+			// from "completed in <1ms"; lastReused and gotConnAt are cleared so
+			// a fresh dial that fails before GotConn is not reported as a reuse
+			// of the previous connection.
+			c.ttfb = durationUnset
+			c.dns = durationUnset
+			c.connect = durationUnset
+			c.tls = durationUnset
 			c.wroteReq = false
-			c.dns = 0
-			c.connect = 0
-			c.tls = 0
+			c.lastReused = false
 			c.lastIdle = 0
+			c.gotConnAt = time.Time{}
 			c.mu.Unlock()
 		},
 		GotConn: func(info httptrace.GotConnInfo) {
@@ -88,6 +109,12 @@ func (c *TraceCollector) Trace() *httptrace.ClientTrace {
 			c.dns = time.Since(c.dnsStart)
 			c.mu.Unlock()
 		},
+		// ConnectStart and ConnectDone assume a single TCP connect attempt is in
+		// flight at a time. Under the platform's default dual-stack Fast
+		// Fallback a host may briefly race IPv4 and IPv6 connects; if that
+		// happens connect_ms reflects the most recent attempt rather than the
+		// exact winning dial. The connection-reuse and time-to-first-byte
+		// signals this instrumentation exists for are unaffected.
 		ConnectStart: func(_, _ string) {
 			c.mu.Lock()
 			c.connStart = time.Now()
@@ -108,7 +135,15 @@ func (c *TraceCollector) Trace() *httptrace.ClientTrace {
 			c.tls = time.Since(c.tlsStart)
 			c.mu.Unlock()
 		},
-		WroteRequest: func(httptrace.WroteRequestInfo) {
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			// WroteRequest also fires when the write itself failed, carrying the
+			// error in info.Err. Recording only the success case keeps
+			// wrote_request=true with ttfb_ms=-1 meaning "request written, no
+			// response" (the black-hole signature) rather than a masked write
+			// failure.
+			if info.Err != nil {
+				return
+			}
 			c.mu.Lock()
 			c.wroteReq = true
 			c.mu.Unlock()

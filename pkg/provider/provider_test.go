@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"testing"
 
@@ -372,4 +373,119 @@ func TestValidateLogsImageContext(t *testing.T) {
 	assert.InDelta(t, 2.0, fetchErr["image_index"], 0.0001, "failure line should report the 1-based image position")
 	assert.Equal(t, entry["request_id"], fetchErr["request_id"],
 		"per-image failure line should carry the request's correlation id")
+}
+
+// traceProbeFetcher records whether a client trace was attached to the fetch
+// context and always fails, so the provider's failure-logging path runs and
+// its trace fields can be asserted.
+type traceProbeFetcher struct {
+	mockBundleFetcher
+	sawTrace bool
+}
+
+func (f *traceProbeFetcher) BundleFromName(ctx context.Context, _ name.Reference, _ []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
+	f.sawTrace = httptrace.ContextClientTrace(ctx) != nil
+	return nil, nil, &fetcher.FetchError{
+		Step:        fetcher.StepDescriptor,
+		Kind:        fetcher.KindTimeout,
+		Attempts:    3,
+		Recoverable: false,
+		Err:         context.DeadlineExceeded,
+	}
+}
+
+// lastLogLine returns the last JSON log entry in buf whose "msg" equals msg, or
+// nil if none is present.
+func lastLogLine(t *testing.T, buf *bytes.Buffer, msg string) map[string]any {
+	t.Helper()
+	var found map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &m))
+		if m["msg"] == msg {
+			found = m
+		}
+	}
+	return found
+}
+
+// TestValidateAttachesTraceAndLogsFieldsOnFailure verifies the provider wires a
+// client trace onto the fetch context when tracing is enabled and appends the
+// connection-phase fields to the failure log line.
+func TestValidateAttachesTraceAndLogsFieldsOnFailure(t *testing.T) {
+	prevTrace := fetcher.TraceEnabled
+	fetcher.TraceEnabled = true
+	defer func() { fetcher.TraceEnabled = prevTrace }()
+
+	v := &mockVerifier{}
+	kc := &mockKeyChainProvider{}
+	bf := &traceProbeFetcher{}
+	provider := New(v, kc, bf)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(prev)
+
+	request := &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{validImageName},
+		},
+	}
+	provider.Validate(context.Background(), request)
+
+	assert.True(t, bf.sawTrace,
+		"fetch context should carry an httptrace.ClientTrace when tracing is enabled")
+
+	fetchErr := lastLogLine(t, &buf, "validate: error fetching bundles")
+	require.NotNil(t, fetchErr, "expected a fetch error log line")
+	// The connection-phase fields ride on the existing failure line.
+	assert.Contains(t, fetchErr, "ttfb_ms")
+	assert.Contains(t, fetchErr, "conns_new")
+	assert.Contains(t, fetchErr, "wrote_request")
+	// The pre-existing failure fields must survive alongside the new ones.
+	assert.Equal(t, "timeout", fetchErr["reason"])
+}
+
+// TestValidateOmitsTraceFieldsWhenDisabled verifies the -registry-trace kill
+// switch: with tracing disabled no trace is attached and the failure line
+// carries none of the connection-phase fields.
+func TestValidateOmitsTraceFieldsWhenDisabled(t *testing.T) {
+	prevTrace := fetcher.TraceEnabled
+	fetcher.TraceEnabled = false
+	defer func() { fetcher.TraceEnabled = prevTrace }()
+
+	v := &mockVerifier{}
+	kc := &mockKeyChainProvider{}
+	bf := &traceProbeFetcher{}
+	provider := New(v, kc, bf)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(prev)
+
+	request := &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{validImageName},
+		},
+	}
+	provider.Validate(context.Background(), request)
+
+	assert.False(t, bf.sawTrace,
+		"fetch context should not carry a trace when tracing is disabled")
+
+	fetchErr := lastLogLine(t, &buf, "validate: error fetching bundles")
+	require.NotNil(t, fetchErr, "expected a fetch error log line")
+	assert.NotContains(t, fetchErr, "ttfb_ms")
+	assert.NotContains(t, fetchErr, "conns_new")
+	// The pre-existing failure fields are still present.
+	assert.Equal(t, "timeout", fetchErr["reason"])
 }
