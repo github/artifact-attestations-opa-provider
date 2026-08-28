@@ -282,6 +282,20 @@ type BundleResult struct {
 	Bundles  []*bundle.Bundle
 	Hash     *v1.Hash
 	Attempts int
+	// Trail is the classified outcome of every attempt that failed before this
+	// result succeeded, oldest first. It is populated on the success path so a
+	// retry-rescued fetch can report the failures its final attempt masked;
+	// it is empty for a first-attempt success (len(Trail) == Attempts-1 on
+	// success). A failed fetch carries its trail on the returned *FetchError
+	// instead (see FetchError.Trail), so this stays empty there.
+	Trail []AttemptOutcome
+}
+
+// AttemptTrail renders this result's pre-success failure outcomes as the same
+// compact, ordered "reason:step" string produced for the failure path (see the
+// AttemptTrail function). It is the empty string for a first-attempt success.
+func (r BundleResult) AttemptTrail() string {
+	return formatAttemptTrail(r.Trail)
 }
 
 // BundleFromName fetches a sigstore bundle for a container from the OCI
@@ -337,10 +351,14 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 		b, h, err := attempt(ictx)
 		cancel()
 		if err == nil {
+			// outcomes here holds exactly the attempts that failed before this
+			// one; the winning attempt is never appended, so a first-attempt
+			// success carries an empty trail.
 			return BundleResult{
 				Bundles:  b,
 				Hash:     h,
 				Attempts: attempts,
+				Trail:    outcomes,
 			}, nil
 		}
 		lastErr = err
@@ -638,11 +656,22 @@ func Classify(err error) (reason string, step string, attempts int) {
 // safe as a log field; it must not be used as a metric label.
 func AttemptTrail(err error) string {
 	var fe *FetchError
-	if !errors.As(err, &fe) || len(fe.Trail) == 0 {
+	if !errors.As(err, &fe) {
 		return ""
 	}
-	tokens := make([]string, len(fe.Trail))
-	for i, o := range fe.Trail {
+	return formatAttemptTrail(fe.Trail)
+}
+
+// formatAttemptTrail renders a sequence of per-attempt outcomes as the compact
+// "reason:step" string documented on AttemptTrail. It is shared by the failure
+// path (FetchError.Trail via AttemptTrail) and the success path
+// (BundleResult.Trail via BundleResult.AttemptTrail).
+func formatAttemptTrail(outcomes []AttemptOutcome) string {
+	if len(outcomes) == 0 {
+		return ""
+	}
+	tokens := make([]string, len(outcomes))
+	for i, o := range outcomes {
 		reason := string(o.Reason)
 		if reason == "" {
 			reason = string(KindUnknown)

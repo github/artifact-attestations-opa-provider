@@ -501,8 +501,8 @@ type trailFetcher struct {
 	mockBundleFetcher
 }
 
-func (*trailFetcher) BundleFromName(_ context.Context, _ name.Reference, _ []remote.Option) ([]*bundle.Bundle, *v1.Hash, error) {
-	return nil, nil, &fetcher.FetchError{
+func (*trailFetcher) BundleFromName(_ context.Context, _ name.Reference, _ []remote.Option) (fetcher.BundleResult, error) {
+	return fetcher.BundleResult{Attempts: 3}, &fetcher.FetchError{
 		Step:     fetcher.StepDescriptor,
 		Kind:     fetcher.KindCanceled,
 		Attempts: 3,
@@ -544,4 +544,81 @@ func TestValidateLogsAttemptTrailOnFailure(t *testing.T) {
 	// The terminal reason stays honest, and the trail rides alongside it.
 	assert.Equal(t, "canceled", fetchErr["reason"])
 	assert.Equal(t, "timeout:descriptor,timeout:descriptor,canceled:descriptor", fetchErr["attempt_trail"])
+}
+
+// rescuedSuccessFetcher returns a successful result that only succeeded after
+// earlier attempts failed, carrying their outcomes on the result's trail.
+type rescuedSuccessFetcher struct {
+	mockBundleFetcher
+}
+
+func (*rescuedSuccessFetcher) BundleFromName(_ context.Context, _ name.Reference, _ []remote.Option) (fetcher.BundleResult, error) {
+	return fetcher.BundleResult{
+		Bundles:  []*bundle.Bundle{{}},
+		Hash:     &v1.Hash{Algorithm: "sha256", Hex: "abc"},
+		Attempts: 3,
+		Trail: []fetcher.AttemptOutcome{
+			{Reason: fetcher.KindTimeout, Step: fetcher.StepDescriptor},
+			{Reason: fetcher.KindTimeout, Step: fetcher.StepDescriptor},
+		},
+	}, nil
+}
+
+// TestValidateLogsAttemptTrailOnRescuedSuccess verifies that a fetch which
+// succeeded only after earlier failures surfaces those failures on the success
+// line, so a retry-rescued success does not hide them.
+func TestValidateLogsAttemptTrailOnRescuedSuccess(t *testing.T) {
+	v := &mockVerifier{}
+	kc := &mockKeyChainProvider{}
+	bf := &rescuedSuccessFetcher{}
+	provider := New(v, kc, bf)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(prev)
+
+	request := &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{validImageName},
+		},
+	}
+	provider.Validate(context.Background(), request)
+
+	fetched := lastLogLine(t, &buf, "validate: fetched OCI bundles")
+	require.NotNil(t, fetched, "expected a fetch success log line")
+	assert.InDelta(t, 3.0, fetched["attempts"], 0.0001)
+	assert.Equal(t, "timeout:descriptor,timeout:descriptor", fetched["attempt_trail"])
+}
+
+// TestValidateOmitsAttemptTrailOnFirstAttemptSuccess verifies the common case:
+// a first-attempt success reports attempts=1 and no attempt_trail, so the field
+// stays off the success path when there is nothing to surface.
+func TestValidateOmitsAttemptTrailOnFirstAttemptSuccess(t *testing.T) {
+	v := &mockVerifier{}
+	kc := &mockKeyChainProvider{}
+	bf := &mockBundleFetcher{}
+	provider := New(v, kc, bf)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(prev)
+
+	request := &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{validImageName},
+		},
+	}
+	provider.Validate(context.Background(), request)
+
+	fetched := lastLogLine(t, &buf, "validate: fetched OCI bundles")
+	require.NotNil(t, fetched, "expected a fetch success log line")
+	assert.InDelta(t, 1.0, fetched["attempts"], 0.0001)
+	assert.NotContains(t, fetched, "attempt_trail",
+		"a first-attempt success must not carry an attempt_trail field")
 }

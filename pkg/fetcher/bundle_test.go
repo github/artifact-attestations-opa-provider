@@ -353,7 +353,7 @@ func TestRetryBundleTrailDeMasksTerminalCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	var attempts int
 
-	_, _, err := retryBundle(ctx, 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	result, err := retryBundle(ctx, 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		attempts++
 		if attempts < 3 {
 			return nil, nil, newDescriptorError(context.DeadlineExceeded)
@@ -373,12 +373,13 @@ func TestRetryBundleTrailDeMasksTerminalCancellation(t *testing.T) {
 	assert.Equal(t, AttemptOutcome{Reason: KindCanceled, Step: StepDescriptor}, fe.Trail[2])
 	assert.Equal(t, "timeout:descriptor,timeout:descriptor,canceled:descriptor", AttemptTrail(err))
 	assert.Len(t, fe.Trail, fe.Attempts, "len(Trail) == Attempts")
+	assert.Equal(t, fe.Attempts, result.Attempts, "BundleResult.Attempts agrees with FetchError.Attempts")
 }
 
 func TestRetryBundleTrailRecordsExhaustedRetries(t *testing.T) {
 	const maxAttempts = 3
 
-	_, _, err := retryBundle(t.Context(), maxAttempts, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	result, err := retryBundle(t.Context(), maxAttempts, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		return nil, nil, newReferrersError(errors.New("boom"))
 	})
 
@@ -391,12 +392,13 @@ func TestRetryBundleTrailRecordsExhaustedRetries(t *testing.T) {
 		assert.Equal(t, AttemptOutcome{Reason: KindReferrersUnavailable, Step: StepReferrers}, o, "attempt %d", i)
 	}
 	assert.Len(t, fe.Trail, fe.Attempts, "len(Trail) == Attempts")
+	assert.Equal(t, fe.Attempts, result.Attempts, "BundleResult.Attempts agrees with FetchError.Attempts")
 }
 
 func TestRetryBundleTrailStopsOnNonRecoverable(t *testing.T) {
 	var attempts int
 
-	_, _, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	result, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		attempts++
 		return nil, nil, newFetchError(StepDescriptor, KindDescriptorError, &transport.Error{StatusCode: http.StatusUnauthorized})
 	})
@@ -409,6 +411,7 @@ func TestRetryBundleTrailStopsOnNonRecoverable(t *testing.T) {
 	assert.Equal(t, AttemptOutcome{Reason: KindUnauthorized, Step: StepDescriptor}, fe.Trail[0])
 	assert.Equal(t, "unauthorized:descriptor", AttemptTrail(err))
 	assert.Len(t, fe.Trail, fe.Attempts, "len(Trail) == Attempts")
+	assert.Equal(t, fe.Attempts, result.Attempts, "BundleResult.Attempts agrees with FetchError.Attempts")
 }
 
 func TestRetryBundleTrailCarriesPriorAttemptsOnDelayCancel(t *testing.T) {
@@ -428,7 +431,7 @@ func TestRetryBundleTrailCarriesPriorAttemptsOnDelayCancel(t *testing.T) {
 	// A long delay so the select can only return via the (already canceled)
 	// parent, never the timer; if the debug hook ever stops firing the test
 	// fails fast on assertions rather than hanging on the timer.
-	_, _, err := retryBundle(ctx, 3, time.Second, 5*time.Second, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	_, err := retryBundle(ctx, 3, time.Second, 5*time.Second, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		attempts++
 		return nil, nil, newDescriptorError(context.DeadlineExceeded)
 	})
@@ -451,7 +454,7 @@ func TestRetryBundleTrailClassifiesNonFetchErrors(t *testing.T) {
 	// classified rather than recording it as "unknown".
 	const maxAttempts = 3
 
-	_, _, err := retryBundle(t.Context(), maxAttempts, 5*time.Millisecond, 0, func(ctx context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	result, err := retryBundle(t.Context(), maxAttempts, 5*time.Millisecond, 0, func(ctx context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		<-ctx.Done()
 		return nil, nil, ctx.Err()
 	})
@@ -467,6 +470,48 @@ func TestRetryBundleTrailClassifiesNonFetchErrors(t *testing.T) {
 	// A stepless outcome renders as just its reason (no trailing separator).
 	assert.Equal(t, "timeout,timeout,timeout", AttemptTrail(err))
 	assert.Len(t, fe.Trail, fe.Attempts, "len(Trail) == Attempts")
+	assert.Equal(t, fe.Attempts, result.Attempts, "BundleResult.Attempts agrees with FetchError.Attempts")
+}
+
+func TestRetryBundleSuccessCarriesPriorFailureTrail(t *testing.T) {
+	// A fetch that fails twice recoverably then succeeds must surface the two
+	// prior failures on the successful result, so a retry-rescued success does
+	// not silently hide them. The winning attempt is not itself a failure, so
+	// len(Trail) == Attempts-1.
+	expectedBundles := []*bundle.Bundle{{}}
+	expectedHash := &v1.Hash{Algorithm: "sha256", Hex: "abc"}
+	var attempts int
+
+	result, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, nil, newDescriptorError(context.DeadlineExceeded)
+		}
+		return expectedBundles, expectedHash, nil
+	})
+
+	require.NoError(t, err)
+	assert.Same(t, expectedBundles[0], result.Bundles[0])
+	assert.Same(t, expectedHash, result.Hash)
+	assert.Equal(t, 3, result.Attempts)
+	require.Len(t, result.Trail, 2)
+	assert.Equal(t, AttemptOutcome{Reason: KindTimeout, Step: StepDescriptor}, result.Trail[0])
+	assert.Equal(t, AttemptOutcome{Reason: KindTimeout, Step: StepDescriptor}, result.Trail[1])
+	assert.Equal(t, "timeout:descriptor,timeout:descriptor", result.AttemptTrail())
+	assert.Len(t, result.Trail, result.Attempts-1, "len(Trail) == Attempts-1 on success")
+}
+
+func TestRetryBundleFirstAttemptSuccessHasEmptyTrail(t *testing.T) {
+	// The common case: a first-attempt success records no prior failures, so
+	// the trail is empty and renders to nothing (the provider omits the field).
+	result, err := retryBundle(t.Context(), 3, time.Second, 0, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		return []*bundle.Bundle{{}}, &v1.Hash{Algorithm: "sha256", Hex: "abc"}, nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Attempts)
+	assert.Empty(t, result.Trail)
+	assert.Empty(t, result.AttemptTrail())
 }
 
 func TestAttemptTrail(t *testing.T) {
@@ -492,6 +537,14 @@ func TestAttemptTrail(t *testing.T) {
 		{Reason: KindTimeout},
 		{Reason: KindCanceled},
 	}}))
+
+	// BundleResult.AttemptTrail renders its prior-failure trail the same way,
+	// and is empty when there were no prior failures.
+	assert.Empty(t, BundleResult{Attempts: 1}.AttemptTrail())
+	assert.Equal(t, "timeout:descriptor,timeout:descriptor", BundleResult{Attempts: 3, Trail: []AttemptOutcome{
+		{Reason: KindTimeout, Step: StepDescriptor},
+		{Reason: KindTimeout, Step: StepDescriptor},
+	}}.AttemptTrail())
 }
 
 // cancelOnMessage is a slog.Handler that invokes cancel whenever it sees a

@@ -168,10 +168,19 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		metrics.AttestationsRetrieved.Add(float64(len(result.Bundles)))
-		imgLog.Info("validate: fetched OCI bundles",
+		fetchedFields := []any{
 			"count", len(result.Bundles),
 			"duration_s", dur.Seconds(),
-			"attempts", result.Attempts)
+			"attempts", result.Attempts,
+		}
+		// A retry-rescued fetch (more than one attempt) succeeded only after
+		// earlier attempts failed; surface those prior outcomes so a success
+		// that masked real fetch failures is still visible. A first-attempt
+		// success adds nothing, so the field stays off the common path.
+		if result.Attempts > 1 {
+			fetchedFields = append(fetchedFields, "attempt_trail", result.AttemptTrail())
+		}
+		imgLog.Info("validate: fetched OCI bundles", fetchedFields...)
 
 		if len(result.Bundles) == 0 {
 			metrics.AttestationsMissing.Inc()
