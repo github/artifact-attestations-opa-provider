@@ -57,6 +57,8 @@ var (
 	registryMaxIdleConns        = flag.Int("registry-max-idle-conns", 25, "max idle registry connections retained across all hosts; 0 means unlimited")
 	registryMaxIdleConnsPerHost = flag.Int("registry-max-idle-conns-per-host", 25, "max idle registry connections retained per host; 0 uses the net/http default of 2")
 
+	registryTrace = flag.Bool("registry-trace", true, "emit HTTP connection-phase timings on fetch failures")
+
 	updateCABundle = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
 )
 
@@ -90,6 +92,7 @@ func main() {
 		log.Fatal(err)
 	}
 	fetcher.RetryThrottled = *bundleRetryThrottled
+	fetcher.TraceEnabled = *registryTrace
 
 	var vCfg = app.VerifierCfg{
 		TufRoot: *tufRoot,
