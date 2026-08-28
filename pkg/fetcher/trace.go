@@ -159,9 +159,12 @@ func (c *TraceCollector) Trace() *httptrace.ClientTrace {
 }
 
 // Fields returns structured log key/values describing where the fetch spent
-// its connection time. A ttfb_ms of -1 means no response byte was ever
-// received on the last connection: the request was written into a connection
-// that returned nothing before the deadline.
+// its connection time. The black-hole signature — a request written into a
+// connection that returned nothing before the deadline — is the combination
+// wrote_request=true and ttfb_ms=-1. A ttfb_ms of -1 on its own only means no
+// response byte was recorded on the last connection, which is also the case
+// when establishment (DNS/connect/TLS) or the request write failed before any
+// byte could arrive; pair it with wrote_request to tell those apart.
 func (c *TraceCollector) Fields() []any {
 	c.mu.Lock()
 	defer c.mu.Unlock()
