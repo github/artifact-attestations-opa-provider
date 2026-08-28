@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -411,18 +412,24 @@ func TestRetryBundleTrailStopsOnNonRecoverable(t *testing.T) {
 }
 
 func TestRetryBundleTrailCarriesPriorAttemptsOnDelayCancel(t *testing.T) {
-	// Fail the first attempt recoverably without touching the parent, then
-	// cancel the parent while the loop is waiting out the inter-attempt delay.
-	// The terminal error is the delay-branch cancel (no in-flight step), but it
-	// must still carry the first attempt's outcome.
+	// Drive the delay-branch cancel deterministically instead of racing a
+	// wall-clock timer: retryBundle emits its per-attempt debug log immediately
+	// before the inter-attempt delay select, so a handler that cancels the
+	// parent on that log guarantees the next select observes cancellation. The
+	// handler runs synchronously in retryBundle's own goroutine, so there is no
+	// timing dependency. The terminal error is the delay-branch cancel (no
+	// in-flight step) but must still carry the first attempt's outcome.
 	ctx, cancel := context.WithCancel(t.Context())
-	var attempts int
+	prev := slog.Default()
+	slog.SetDefault(slog.New(&cancelOnMessage{msg: "bundle fetch attempt failed", cancel: cancel}))
+	defer slog.SetDefault(prev)
 
-	_, _, err := retryBundle(ctx, 3, time.Second, 250*time.Millisecond, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+	var attempts int
+	// A long delay so the select can only return via the (already canceled)
+	// parent, never the timer; if the debug hook ever stops firing the test
+	// fails fast on assertions rather than hanging on the timer.
+	_, _, err := retryBundle(ctx, 3, time.Second, 5*time.Second, func(context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
 		attempts++
-		// Cancel well after this attempt's post-return context check but well
-		// before the 250ms delay timer, so the cancel lands in the delay branch.
-		time.AfterFunc(20*time.Millisecond, cancel)
 		return nil, nil, newDescriptorError(context.DeadlineExceeded)
 	})
 
@@ -435,6 +442,30 @@ func TestRetryBundleTrailCarriesPriorAttemptsOnDelayCancel(t *testing.T) {
 	require.Len(t, fe.Trail, 1)
 	assert.Equal(t, AttemptOutcome{Reason: KindTimeout, Step: StepDescriptor}, fe.Trail[0])
 	assert.Equal(t, "timeout:descriptor", AttemptTrail(err))
+	assert.Len(t, fe.Trail, fe.Attempts, "len(Trail) == Attempts")
+}
+
+func TestRetryBundleTrailClassifiesNonFetchErrors(t *testing.T) {
+	// An attempt may return a raw (non-*FetchError) error, e.g. ctx.Err()
+	// directly. The trail must classify it the same way the terminal error is
+	// classified rather than recording it as "unknown".
+	const maxAttempts = 3
+
+	_, _, err := retryBundle(t.Context(), maxAttempts, 5*time.Millisecond, 0, func(ctx context.Context) ([]*bundle.Bundle, *v1.Hash, error) {
+		<-ctx.Done()
+		return nil, nil, ctx.Err()
+	})
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindTimeout, fe.Kind, "terminal reason is classified from the raw error")
+	require.Len(t, fe.Trail, maxAttempts)
+	for i, o := range fe.Trail {
+		assert.Equal(t, KindTimeout, o.Reason, "attempt %d trail must match the terminal reason, not unknown", i)
+		assert.Empty(t, o.Step, "a raw attempt error carries no fetch step")
+	}
+	// A stepless outcome renders as just its reason (no trailing separator).
+	assert.Equal(t, "timeout,timeout,timeout", AttemptTrail(err))
 	assert.Len(t, fe.Trail, fe.Attempts, "len(Trail) == Attempts")
 }
 
@@ -455,7 +486,37 @@ func TestAttemptTrail(t *testing.T) {
 
 	// A missing reason falls back to "unknown" so the token is never bare.
 	assert.Equal(t, "unknown:blob", AttemptTrail(&FetchError{Trail: []AttemptOutcome{{Step: StepBlob}}}))
+
+	// A stepless outcome renders as just its reason, with no trailing separator.
+	assert.Equal(t, "timeout,canceled", AttemptTrail(&FetchError{Trail: []AttemptOutcome{
+		{Reason: KindTimeout},
+		{Reason: KindCanceled},
+	}}))
 }
+
+// cancelOnMessage is a slog.Handler that invokes cancel whenever it sees a
+// record with the given message. retryBundle logs each retryable attempt
+// failure immediately before the inter-attempt delay select, so canceling from
+// this handler deterministically steers the loop into the delay-branch cancel
+// path without depending on wall-clock timing. Handle runs synchronously in the
+// caller's goroutine.
+type cancelOnMessage struct {
+	msg    string
+	cancel context.CancelFunc
+}
+
+func (*cancelOnMessage) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *cancelOnMessage) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == h.msg {
+		h.cancel()
+	}
+	return nil
+}
+
+func (h *cancelOnMessage) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *cancelOnMessage) WithGroup(string) slog.Handler { return h }
 
 func TestResolveTransportTimeoutsDerivesFromBudget(t *testing.T) {
 	// With no overrides, each phase is a fraction of the per-attempt budget.

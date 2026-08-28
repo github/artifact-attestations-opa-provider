@@ -347,9 +347,11 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 
 		// Record this attempt's classified outcome before any early return so
 		// the terminal error carries the reason for every attempt, not just the
-		// last. reason/step are reused by the debug log below.
-		reason, step, _ := Classify(err)
-		outcomes = append(outcomes, AttemptOutcome{Reason: FailureKind(reason), Step: Step(step)})
+		// last. kind/step are reused by the debug log below. Non-*FetchError
+		// attempt errors are classified here too so the trail matches the
+		// terminal reason instead of collapsing to "unknown".
+		kind, step := classifyAttempt(err)
+		outcomes = append(outcomes, AttemptOutcome{Reason: kind, Step: step})
 
 		// Stop early on errors that a retry cannot fix (auth, invalid
 		// bundle). Record how many attempts we made for observability.
@@ -381,8 +383,8 @@ func retryBundle(ctx context.Context, maxAttempts int, timeout, delay time.Durat
 		slog.Debug("bundle fetch attempt failed",
 			"attempt", attempts,
 			"max_attempts", maxAttempts,
-			"reason", reason,
-			"step", step,
+			"reason", string(kind),
+			"step", string(step),
 			"error", err)
 	}
 
@@ -550,6 +552,25 @@ func classifyTransport(err error) (FailureKind, int) {
 	return KindUnknown, 0
 }
 
+// classifyAttempt derives a single attempt's outcome (reason and step) for the
+// per-attempt trail. A *FetchError already carries both. Any other error (a raw
+// context or transport error, e.g. an attempt that returns ctx.Err() directly)
+// is run through classifyTransport so its reason is accurate — matching how
+// finalizeFetchError classifies the same terminal error — rather than being
+// recorded as "unknown". Such raw errors carry no fetch step.
+func classifyAttempt(err error) (FailureKind, Step) {
+	var fe *FetchError
+	if errors.As(err, &fe) {
+		kind := fe.Kind
+		if kind == "" {
+			kind = KindUnknown
+		}
+		return kind, fe.Step
+	}
+	kind, _ := classifyTransport(err)
+	return kind, ""
+}
+
 // kindFromContext classifies a context error.
 func kindFromContext(err error) FailureKind {
 	switch {
@@ -610,10 +631,11 @@ func Classify(err error) (reason string, step string, attempts int) {
 // AttemptTrail renders a fetch error's per-attempt outcomes as a compact,
 // ordered, low-cardinality string of "reason:step" tokens joined by commas
 // (e.g. "timeout:descriptor,timeout:descriptor,canceled:descriptor"), oldest
-// attempt first. It returns the empty string when err is not a *FetchError or
-// carries no recorded trail. The tokens reuse the same stable, low-cardinality
-// reason/step values as the terminal fields, so the result is safe as a log
-// field; it must not be used as a metric label.
+// attempt first. An outcome with no fetch step (a raw context/transport error)
+// renders as just its reason. It returns the empty string when err is not a
+// *FetchError or carries no recorded trail. The tokens reuse the same stable,
+// low-cardinality reason/step values as the terminal fields, so the result is
+// safe as a log field; it must not be used as a metric label.
 func AttemptTrail(err error) string {
 	var fe *FetchError
 	if !errors.As(err, &fe) || len(fe.Trail) == 0 {
@@ -624,6 +646,10 @@ func AttemptTrail(err error) string {
 		reason := string(o.Reason)
 		if reason == "" {
 			reason = string(KindUnknown)
+		}
+		if o.Step == "" {
+			tokens[i] = reason
+			continue
 		}
 		tokens[i] = reason + ":" + string(o.Step)
 	}
