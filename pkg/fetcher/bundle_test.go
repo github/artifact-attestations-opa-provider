@@ -197,6 +197,25 @@ func TestClassify(t *testing.T) {
 	assert.Equal(t, "timeout", reason)
 }
 
+func TestFailureStatus(t *testing.T) {
+	// A registry that answered with an error carries its status code.
+	assert.Equal(t, http.StatusNotFound,
+		FailureStatus(&FetchError{Step: StepDescriptor, Kind: KindNotFound, StatusCode: http.StatusNotFound}))
+	assert.Equal(t, http.StatusTooManyRequests,
+		FailureStatus(&FetchError{Step: StepReferrers, Kind: KindThrottled, StatusCode: http.StatusTooManyRequests}))
+
+	// A connection-level failure carries no registry response: status 0.
+	assert.Equal(t, 0,
+		FailureStatus(&FetchError{Step: StepDescriptor, Kind: KindTimeout, Err: context.DeadlineExceeded}))
+
+	// A plain (non-fetch) error also has no status.
+	assert.Equal(t, 0, FailureStatus(errors.New("some other error")))
+
+	// The status is recovered through a wrapped error.
+	assert.Equal(t, http.StatusForbidden,
+		FailureStatus(fmt.Errorf("wrapped: %w", &FetchError{StatusCode: http.StatusForbidden})))
+}
+
 func TestFetchErrorErrorAndUnwrap(t *testing.T) {
 	inner := errors.New("boom")
 	fe := &FetchError{Step: StepBlob, Kind: KindBlobError, Attempts: 2, StatusCode: 500, Err: inner}

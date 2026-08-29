@@ -646,6 +646,22 @@ func Classify(err error) (reason string, step string, attempts int) {
 	return string(KindUnknown), "", 0
 }
 
+// FailureStatus returns the HTTP status code recorded on a fetch failure, or 0
+// when no numeric status was recorded. A nonzero value means the registry
+// answered with that status; 0 means the status is unavailable — either the
+// registry never responded (a connection-level failure), or the response
+// carried no numeric status (e.g. a diagnostic-only throttle), or the error is
+// not a fetch error. It is a small, non-breaking companion to Classify so
+// callers can dimension metrics by the registry status without widening
+// Classify's signature.
+func FailureStatus(err error) int {
+	var fe *FetchError
+	if errors.As(err, &fe) {
+		return fe.StatusCode
+	}
+	return 0
+}
+
 // AttemptTrail renders a fetch error's per-attempt outcomes as a compact,
 // ordered, low-cardinality string of "reason:step" tokens joined by commas
 // (e.g. "timeout:descriptor,timeout:descriptor,canceled:descriptor"), oldest

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http/httptrace"
+	"strconv"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -76,28 +77,40 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 	var rstart = time.Now()
 	var err error
 
-	defer func() {
-		var dur = time.Since(rstart)
-		metrics.AttestationsReqTimer.Observe(dur.Seconds())
-	}()
-
 	// Record the number of images (keys) in this request. Gatekeeper sends
 	// every image in a pod as a single request, so this captures the pod's
 	// image count. request_id/image_count/image_index are threaded through the
 	// per-image logs below so a single failure line (e.g. a fetch timeout) can
 	// be traced back to whether it was a solo or a large multi-image request.
 	var imageCount = len(r.Request.Keys)
+
+	// allOK tracks whether every image in the request verified cleanly. Any
+	// branch below that records an image error (or fails the whole request)
+	// clears it, so the request timer can be split into totally-successful vs
+	// not. It is declared before the deferred observe so the closure captures
+	// it, and read only at return.
+	allOK := true
+	defer func() {
+		outcome := "success"
+		if !allOK {
+			outcome = "failure"
+		}
+		metrics.AttestationsReqTimer.
+			WithLabelValues(imageCountLabel(imageCount), outcome).
+			Observe(time.Since(rstart).Seconds())
+	}()
+
 	var requestID = uuid.NewString()
 	var reqLog = slog.With(
 		"request_id", requestID,
 		"image_count", imageCount)
-	metrics.AttestationsReqImages.Observe(float64(imageCount))
 	reqLog.Info("validate: received request")
 
 	// Get the keychain to be able to access the OCI registry.
 	// If the keychain configured is empty, the default keychain is used
 	// which works for public registries.
 	if kc, err = p.kc.KeyChain(ctx); err != nil {
+		allOK = false
 		reqLog.Error("validate: error retrieving key chain",
 			"error", err)
 		return ErrorResponse(fmt.Sprintf("ERROR: KeyChain: %s", err))
@@ -115,6 +128,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 
 		imgLog.Info("validate: verify signature")
 		if ref, err = name.ParseReference(key); err != nil {
+			allOK = false
 			imgLog.Error("validate: error parsing reference",
 				"error", err)
 			results = append(results, externaldata.Item{
@@ -137,21 +151,32 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 		result, err := p.bf.BundleFromName(fctx, ref, ro)
 		dur := time.Since(start)
-		// Record the fetch latency for both successful and failed fetches.
-		// The tail of this histogram (failed fetches timing out) is a key
-		// signal when troubleshooting registry latency, so it must include
-		// failures.
-		metrics.AttestationsPullTimer.Observe(dur.Seconds())
+		// Label the per-image fetch duration by outcome so success-latency
+		// percentiles and failure durations can be read apart; on failure the
+		// reason/step/attempts dimensions carry the failure taxonomy. The
+		// failure tail (fetches timing out) is a key registry-latency signal,
+		// so it is observed here alongside successes.
+		outcome, reason, step, attempts := "success", "none", "none", 0
+		if err != nil {
+			outcome = "failure"
+			reason, step, attempts = fetcher.Classify(err)
+		} else {
+			attempts = result.Attempts
+		}
+		metrics.AttestationsPullTimer.
+			WithLabelValues(outcome, reason, step, strconv.Itoa(attempts)).
+			Observe(dur.Seconds())
 
 		if err != nil {
-			reason, step, errAttempts := fetcher.Classify(err)
-			metrics.AttestationsRetrieveFail.WithLabelValues(reason).Inc()
+			allOK = false
+			status := strconv.Itoa(fetcher.FailureStatus(err))
+			metrics.AttestationsRetrieveFail.WithLabelValues(reason, step, status).Inc()
 			// The connection-phase fields ride on the existing failure line, so
 			// there is no added log volume on the success path.
 			fields := []any{
 				"reason", reason,
 				"step", step,
-				"attempts", errAttempts,
+				"attempts", attempts,
 				"attempt_trail", fetcher.AttemptTrail(err),
 				"duration_s", dur.Seconds(),
 				"error", err,
@@ -183,6 +208,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		imgLog.Info("validate: fetched OCI bundles", fetchedFields...)
 
 		if len(result.Bundles) == 0 {
+			allOK = false
 			metrics.AttestationsMissing.Inc()
 			imgLog.Info("validate: no bundles")
 			results = append(results, externaldata.Item{
@@ -203,6 +229,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		}
 
 		if err != nil {
+			allOK = false
 			imgLog.Error("validate: verification error",
 				"image_digest", result.Hash.Hex,
 				"error", err)
@@ -218,6 +245,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				Value: res,
 			})
 		} else {
+			allOK = false
 			imgLog.Info("validate: no valid signatures")
 			results = append(results, externaldata.Item{
 				Key:   key,
@@ -240,4 +268,20 @@ func ErrorResponse(s string) *externaldata.ProviderResponse {
 	resp.Response.SystemError = s
 
 	return &resp
+}
+
+// maxImageCountLabel bounds the request timer's images label. The per-request
+// image count is a handful in practice, but the handler accepts an arbitrary
+// number of keys from the request body, so exact counts are kept only up to
+// this cap and anything larger folds into a single overflow bucket. This keeps
+// the histogram's cardinality finite regardless of request input.
+const maxImageCountLabel = 10
+
+// imageCountLabel renders a request's image count as a bounded label value: the
+// exact count up to maxImageCountLabel, or "<max>+" for anything beyond it.
+func imageCountLabel(n int) string {
+	if n > maxImageCountLabel {
+		return strconv.Itoa(maxImageCountLabel) + "+"
+	}
+	return strconv.Itoa(n)
 }
