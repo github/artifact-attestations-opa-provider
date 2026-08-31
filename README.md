@@ -244,23 +244,34 @@ The metrics exposed beyond the default Prometheus metrics are:
   attestations downloaded from the OCI registry.
 * `aaop_attestations_retrieved_fail`: the total number of
   failed bundle fetches from the OCI registry. Labeled by `reason`
-  (e.g. `timeout`, `throttled`, `unauthorized`, `forbidden`,
-  `referrers_unavailable`, `descriptor_error`, `blob_error`,
-  `bundle_invalid`, `unknown`).
+  (e.g. `timeout`, `canceled`, `throttled`, `unauthorized`, `forbidden`,
+  `not_found`, `referrers_unavailable`, `descriptor_error`, `blob_error`,
+  `bundle_invalid`, `unknown`), `step` (the fetch stage that failed:
+  `descriptor`, `referrers`, `blob`, or `decode`), and `status` (the
+  registry HTTP status code; `0` means no numeric status was recorded —
+  the registry never responded, or its response carried no numeric status,
+  such as a diagnostic-only throttle).
 * `aaop_attestations_verified_ok`: the total number of verified
   attestations.
 * `aaop_attestations_verified_fail`: the total number of
   attestations that failed to verify.
 * `aaop_attestations_request_timer`: the duration in seconds for
-  the validation webhook.
-* `aaop_attestations_request_images`: a histogram of the number of
-  images (keys) included in a single provider request. Gatekeeper sends
-  all of a pod's images in one request, so this captures the pod's image
-  count. Use the `_bucket`/`_count`/`_sum` series to analyze the
-  distribution of images per request (e.g. single-image vs. multi-image
-  pods) and to see whether large multi-image requests are common.
-* `aaop_attestations_retrieved_timer`: the duration in seconds for the
-   time it takes to download the attestations from the OCI registry.
+  the validation webhook. Labeled by `images` (the number of images/keys
+  in the request; Gatekeeper sends all of a pod's images in one request, so
+  this is the pod's image count — recorded exactly up to a small cap, with
+  larger counts folded into a `10+` bucket to keep cardinality bounded) and
+  `outcome` (`success` when every image verified cleanly, otherwise
+  `failure`). Because this is a histogram vector, the total request count is
+  the sum of the `_count` series across all label values (e.g.
+  `sum(aaop_attestations_request_timer_count)`); the `images` label carries
+  the per-request image-count distribution (e.g. single-image vs.
+  multi-image pods).
+* `aaop_attestations_retrieved_timer`: the duration in seconds to fetch
+  the attestations for a single image from the OCI registry, recorded for
+  both successful and failed fetches. Labeled by `outcome` (`success` or
+  `failure`) and, on failure, `reason` and `step` (matching
+  `aaop_attestations_retrieved_fail`) plus `attempts` (the number of fetch
+  attempts made). Successful fetches use `reason`/`step` of `none`.
 * `aaop_attestations_verification_timer`: the duration in seconds for
   the time it takes to verify the retrieved attestations.
 * `aaop_keychain_build_timer`: the duration in seconds to build the
@@ -269,6 +280,10 @@ The metrics exposed beyond the default Prometheus metrics are:
 * `aaop_keychain_refresh_fail`: the total number of background keychain
   refreshes that did not fully rebuild the keychain (a failed or degraded
   rebuild), so the previous keychain was retained.
+* `aaop_config_info`: a gauge whose value is always `1`, exposing the
+  effective fetch configuration as labels (`bundle_timeout`,
+  `bundle_max_attempts`, `bundle_delay`, `retry_throttled`) so the
+  in-force configuration can be compared across instances.
 
 Each request is also logged with a `request_id`, `image_count`, and, for
 per-image log lines, an `image_index` (1-based position within the

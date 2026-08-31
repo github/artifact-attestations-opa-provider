@@ -22,6 +22,7 @@ import (
 	"github.com/github/artifact-attestations-opa-provider/pkg/authn"
 	"github.com/github/artifact-attestations-opa-provider/pkg/cainjector"
 	"github.com/github/artifact-attestations-opa-provider/pkg/fetcher"
+	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 	"github.com/github/artifact-attestations-opa-provider/pkg/provider"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/apis/externaldata/v1beta1"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
@@ -93,6 +94,12 @@ func main() {
 	}
 	fetcher.RetryThrottled = *bundleRetryThrottled
 	fetcher.TraceEnabled = *registryTrace
+
+	// Publish the effective fetch configuration as a config-info gauge, reading
+	// the values after configureBundleFetcher has applied them so the metric
+	// reflects what is actually in force. Emitted before the metrics server
+	// starts serving so it is present on first scrape.
+	metrics.SetConfigInfo(fetcher.Timeout, fetcher.MaxAttempts, fetcher.Delay, fetcher.RetryThrottled)
 
 	var vCfg = app.VerifierCfg{
 		TufRoot: *tufRoot,

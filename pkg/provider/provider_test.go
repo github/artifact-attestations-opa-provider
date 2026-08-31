@@ -23,6 +23,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
 	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
@@ -270,13 +271,30 @@ func (*notFoundBundleFetcher) BundleFromName(_ context.Context, _ name.Reference
 	}
 }
 
+// canceledBundleFetcher fails with a canceled fetch error that carries no
+// registry response (StatusCode 0), exercising the status="0" counter path
+// where the registry never answered.
+type canceledBundleFetcher struct {
+	mockBundleFetcher
+}
+
+func (*canceledBundleFetcher) BundleFromName(_ context.Context, _ name.Reference, _ []remote.Option) (fetcher.BundleResult, error) {
+	return fetcher.BundleResult{Attempts: 3}, &fetcher.FetchError{
+		Step:        fetcher.StepDescriptor,
+		Kind:        fetcher.KindCanceled,
+		Attempts:    3,
+		Recoverable: false,
+		Err:         context.Canceled,
+	}
+}
+
 func TestVerifyNotFound(t *testing.T) {
 	v := &mockVerifier{}
 	kc := &mockKeyChainProvider{}
 	bf := &notFoundBundleFetcher{}
 	provider := New(v, kc, bf)
 
-	before := testutil.ToFloat64(metrics.AttestationsRetrieveFail.WithLabelValues("not_found"))
+	before := testutil.ToFloat64(metrics.AttestationsRetrieveFail.WithLabelValues("not_found", "descriptor", "404"))
 
 	request := &externaldata.ProviderRequest{
 		APIVersion: apiVersion,
@@ -292,38 +310,137 @@ func TestVerifyNotFound(t *testing.T) {
 	assert.Equal(t, "error_fetching_bundle_not_found", response.Response.Items[0].Error)
 	assert.Empty(t, response.Response.SystemError)
 
-	after := testutil.ToFloat64(metrics.AttestationsRetrieveFail.WithLabelValues("not_found"))
-	assert.InDelta(t, 1.0, after-before, 0.0001, `fail metric should be labeled reason="not_found"`)
+	after := testutil.ToFloat64(metrics.AttestationsRetrieveFail.WithLabelValues("not_found", "descriptor", "404"))
+	assert.InDelta(t, 1.0, after-before, 0.0001, `fail metric should be labeled reason="not_found" step="descriptor" status="404"`)
 }
 
-// TestValidateRecordsImageCount verifies the request-images histogram records
-// one observation per request whose value is the number of images (keys).
-func TestValidateRecordsImageCount(t *testing.T) {
-	v := &mockVerifier{}
-	kc := &mockKeyChainProvider{}
-	bf := &mockBundleFetcher{}
-	provider := New(v, kc, bf)
+// TestValidateLabelsFetchFailureCounter verifies the fetch-failure counter is
+// dimensioned by reason, step, and registry status, including the status="0"
+// case where the registry never responded (a cancellation).
+func TestValidateLabelsFetchFailureCounter(t *testing.T) {
+	canceled := metrics.AttestationsRetrieveFail.WithLabelValues("canceled", "descriptor", "0")
+	before := testutil.ToFloat64(canceled)
 
-	readHist := func() (uint64, float64) {
-		m := &dto.Metric{}
-		require.NoError(t, metrics.AttestationsReqImages.Write(m))
-		return m.GetHistogram().GetSampleCount(), m.GetHistogram().GetSampleSum()
-	}
-
-	beforeCount, beforeSum := readHist()
-
-	request := &externaldata.ProviderRequest{
+	provider := New(&mockVerifier{}, &mockKeyChainProvider{}, &canceledBundleFetcher{})
+	provider.Validate(context.Background(), &externaldata.ProviderRequest{
 		APIVersion: apiVersion,
 		Kind:       "ProviderRequest",
-		Request: externaldata.Request{
-			Keys: []string{"image1", "image2", "image3"},
-		},
-	}
-	provider.Validate(context.Background(), request)
+		Request:    externaldata.Request{Keys: []string{validImageName}},
+	})
 
-	afterCount, afterSum := readHist()
-	assert.Equal(t, uint64(1), afterCount-beforeCount, "exactly one request should be observed")
-	assert.InDelta(t, 3.0, afterSum-beforeSum, 0.0001, "sum should increase by the image count")
+	after := testutil.ToFloat64(canceled)
+	assert.InDelta(t, 1.0, after-before, 0.0001,
+		`fail metric should be labeled reason="canceled" step="descriptor" status="0"`)
+}
+
+// errKeyChainProvider always fails to build a keychain, exercising the early
+// request-error return before any image is processed.
+type errKeyChainProvider struct{}
+
+func (*errKeyChainProvider) KeyChain(_ context.Context) (authn.Keychain, error) {
+	return nil, errors.New("keychain boom")
+}
+
+// TestImageCountLabel verifies the request timer's images label is bounded: the
+// exact count up to the cap, and a single overflow bucket beyond it, so an
+// unbounded key count cannot grow histogram cardinality without limit.
+func TestImageCountLabel(t *testing.T) {
+	assert.Equal(t, "0", imageCountLabel(0))
+	assert.Equal(t, "1", imageCountLabel(1))
+	assert.Equal(t, "10", imageCountLabel(maxImageCountLabel))
+	assert.Equal(t, "10+", imageCountLabel(maxImageCountLabel+1))
+	assert.Equal(t, "10+", imageCountLabel(1000))
+}
+
+// observeCount returns the number of observations recorded on a histogram
+// child, read through the concrete metric behind the Observer.
+func observeCount(t *testing.T, o prometheus.Observer) uint64 {
+	t.Helper()
+	m, ok := o.(prometheus.Metric)
+	require.True(t, ok, "histogram child should expose the Metric interface")
+	dtoMetric := &dto.Metric{}
+	require.NoError(t, m.Write(dtoMetric))
+	return dtoMetric.GetHistogram().GetSampleCount()
+}
+
+// TestValidateRecordsFetchOutcome verifies the per-image fetch timer records one
+// observation on the success child on a clean fetch, and one on the matching
+// failure child (carrying reason/step/attempts) when the fetch fails.
+func TestValidateRecordsFetchOutcome(t *testing.T) {
+	fetch := func(bf BundleFetcher) {
+		provider := New(&mockVerifier{}, &mockKeyChainProvider{}, bf)
+		provider.Validate(context.Background(), &externaldata.ProviderRequest{
+			APIVersion: apiVersion,
+			Kind:       "ProviderRequest",
+			Request:    externaldata.Request{Keys: []string{validImageName}},
+		})
+	}
+
+	successChild := metrics.AttestationsPullTimer.WithLabelValues("success", "none", "none", "1")
+	failChild := metrics.AttestationsPullTimer.WithLabelValues("failure", "not_found", "descriptor", "1")
+
+	beforeOK := observeCount(t, successChild)
+	fetch(&mockBundleFetcher{})
+	assert.Equal(t, uint64(1), observeCount(t, successChild)-beforeOK,
+		"a clean fetch should observe the success child once")
+
+	beforeFail := observeCount(t, failChild)
+	fetch(&notFoundBundleFetcher{})
+	assert.Equal(t, uint64(1), observeCount(t, failChild)-beforeFail,
+		"a failed fetch should observe the matching failure child once")
+}
+
+// TestValidateRecordsRequestOutcome verifies the request timer records one
+// observation per request, labelled by the raw image count and whether every
+// image verified cleanly (outcome). This replaces the removed request-images
+// histogram, whose per-request count is now request_timer{images}'s _count.
+func TestValidateRecordsRequestOutcome(t *testing.T) {
+	okVerifier, err := verifier.GHVerifier("")
+	require.NoError(t, err)
+
+	successChild := metrics.AttestationsReqTimer.WithLabelValues("1", "success")
+	failChild := metrics.AttestationsReqTimer.WithLabelValues("1", "failure")
+
+	// A request whose single image verifies cleanly is totally successful.
+	beforeOK := observeCount(t, successChild)
+	provOK := New(okVerifier, &mockKeyChainProvider{}, &mockBundleFetcher{})
+	provOK.Validate(context.Background(), &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request:    externaldata.Request{Keys: []string{validImageName}},
+	})
+	assert.Equal(t, uint64(1), observeCount(t, successChild)-beforeOK,
+		"an all-clean request should observe the success child once")
+
+	// A request whose image fails to fetch is not totally successful.
+	beforeFail := observeCount(t, failChild)
+	provFail := New(&mockVerifier{}, &mockKeyChainProvider{}, &notFoundBundleFetcher{})
+	provFail.Validate(context.Background(), &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request:    externaldata.Request{Keys: []string{validImageName}},
+	})
+	assert.Equal(t, uint64(1), observeCount(t, failChild)-beforeFail,
+		"a request with a failed image should observe the failure child once")
+}
+
+// TestValidateCountsKeychainErrorRequest verifies the request timer still counts
+// the request (as a failure) when the keychain build fails before any image is
+// processed, so _count covers the early-return path.
+func TestValidateCountsKeychainErrorRequest(t *testing.T) {
+	child := metrics.AttestationsReqTimer.WithLabelValues("2", "failure")
+	before := observeCount(t, child)
+
+	provider := New(&mockVerifier{}, &errKeyChainProvider{}, &mockBundleFetcher{})
+	resp := provider.Validate(context.Background(), &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request:    externaldata.Request{Keys: []string{"image1", "image2"}},
+	})
+	require.NotEmpty(t, resp.Response.SystemError, "keychain failure should be a system error")
+
+	assert.Equal(t, uint64(1), observeCount(t, child)-before,
+		"the keychain-error request should be observed once as a failure")
 }
 
 // TestValidateLogsImageContext verifies that per-image log lines carry the
