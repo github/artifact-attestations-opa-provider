@@ -1,4 +1,4 @@
-FROM golang:1.27rc3-alpine3.23@sha256:f561f8ea7bf9b015cda685bdc9ce3904c592af92e6d1f90c3c953f3c8019d2ca AS builder
+FROM golang:1.27-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395 AS builder
 
 WORKDIR /tmp/aaop
 
