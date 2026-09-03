@@ -10,7 +10,7 @@ require (
 	github.com/in-toto/attestation v1.2.0
 	github.com/open-policy-agent/frameworks/constraint v0.0.0-20250310182122-79a9477fa575
 	github.com/prometheus/client_golang v1.24.1
-	github.com/prometheus/client_model v0.6.2
+	github.com/prometheus/client_model v0.6.3
 	github.com/sigstore/sigstore-go v1.3.0
 	github.com/stretchr/testify v1.12.1
 	k8s.io/apimachinery v0.37.0
@@ -141,7 +141,7 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260523011958-0a33c5d7ca68 // indirect
 	google.golang.org/grpc v1.82.1 // indirect
-	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
+	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
