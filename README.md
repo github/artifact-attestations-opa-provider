@@ -276,8 +276,8 @@ The metrics exposed beyond the default Prometheus metrics are:
   the total request count is
   the sum of the `_count` series across all label values (e.g.
   `sum(aaop_attestations_request_timer_count)`); the `images` label carries
-  the per-request image-count distribution (e.g. single-image vs.
-  multi-image pods).
+  the distribution of key counts per request, which is not the same as the
+  distribution of images per pod.
 * `aaop_attestations_retrieved_timer`: the duration in seconds to fetch
   the attestations for a single image from the OCI registry, recorded for
   both successful and failed fetches. Labeled by `outcome` (`success` or

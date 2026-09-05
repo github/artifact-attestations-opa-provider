@@ -251,13 +251,14 @@ func TestInvalid(t *testing.T) {
 	}
 }
 
-// TestInvalidBundleAbortsRequest covers the case lifted out of TestInvalid's
-// table. mockBundleFetcher fails brokenImageName with a raw json error, which
-// classifies as "unknown" rather than bundle_invalid, so it is a fetch failure
-// that aborts the request instead of becoming a cached item error. This test
-// never covered the bundle_invalid path; that is pinned by
+// TestUnclassifiedFetchErrorAbortsRequest covers the case lifted out of
+// TestInvalid's table. mockBundleFetcher fails brokenImageName with a raw json
+// error, which classifies as "unknown" rather than bundle_invalid, so it is an
+// ordinary fetch failure that aborts the request rather than the cached
+// per-image exception. Despite the fixture's name, this does NOT exercise the
+// bundle_invalid path; that is pinned by
 // TestValidateKeepsBundleInvalidAsItemError.
-func TestInvalidBundleAbortsRequest(t *testing.T) {
+func TestUnclassifiedFetchErrorAbortsRequest(t *testing.T) {
 	v, err := verifier.GHVerifier("")
 	require.NoError(t, err)
 	provider := New(v, &mockKeyChainProvider{}, &mockBundleFetcher{})
@@ -399,6 +400,47 @@ func TestValidateAbortsRemainingImages(t *testing.T) {
 		"the request must abort on the first fetch failure, not fetch the remaining images")
 }
 
+// TestValidateLogsAbortContext verifies the request-level abort line and its
+// fields, which are the operational signal that a request was not completed.
+//
+// The keys are chosen so images_processed is non-zero and its contents are an
+// error item, pinning that it counts every item appended so far - including
+// per-image error verdicts - and is not a count of clean verifications.
+func TestValidateLogsAbortContext(t *testing.T) {
+	provider := New(&mockVerifier{}, &mockKeyChainProvider{}, &timeoutBundleFetcher{})
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(prev)
+
+	// "foo+bar" is unparseable, so it appends an invalid_reference item without
+	// fetching. The second key then fails to fetch and aborts, leaving the
+	// third key untouched.
+	provider.Validate(context.Background(), &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{"foo+bar", validImageName, brokenImageName},
+		},
+	})
+
+	abort := lastLogLine(t, &buf, "validate: aborting request")
+	require.NotNil(t, abort, "an aborted request must log a request-level abort line")
+
+	assert.Equal(t, "timeout", abort["reason"])
+	assert.Equal(t, "referrers", abort["step"])
+	// JSON numbers decode as float64.
+	assert.InDelta(t, 2.0, abort["image_index"], 0.0001,
+		"the abort should report the 1-based position of the failing image")
+	assert.InDelta(t, 1.0, abort["images_processed"], 0.0001,
+		"images_processed counts every item appended so far, including error items")
+	assert.InDelta(t, 1.0, abort["images_skipped"], 0.0001,
+		"the images after the failure are skipped, not fetched")
+	assert.NotEmpty(t, abort["request_id"],
+		"the abort line should carry the request's correlation id")
+}
+
 // TestValidateRetainsVerifiedItemsOnAbort verifies that images verified before
 // the abort are still returned. They are cacheable by the caller, so a retry
 // re-fetches only the images that are genuinely missing.
@@ -421,10 +463,11 @@ func TestValidateRetainsVerifiedItemsOnAbort(t *testing.T) {
 }
 
 // TestValidateAbortsOnNotFound pins the decision that a 404 is NOT treated as a
-// cacheable per-image verdict. Fleet data shows these are overwhelmingly
-// registry replication lag that clears in seconds, so caching the denial would
-// outlive its cause. It also pins that the failure counter still increments
-// before the abort, which the operational runbook depends on.
+// cacheable per-image verdict. A reference can be mutable and a registry may
+// resolve it only eventually consistently, so a 404 does not establish that the
+// artifact is absent and caching the denial could outlive its cause. It also
+// pins that the failure counter still increments before the abort, so the
+// failure taxonomy survives the change.
 func TestValidateAbortsOnNotFound(t *testing.T) {
 	failCounter := metrics.AttestationsRetrieveFail.WithLabelValues("not_found", "descriptor", "404")
 	before := testutil.ToFloat64(failCounter)

@@ -216,9 +216,10 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 			// per-image outcomes and replay them, turning a momentary blip into
 			// a sustained failure. Abort the whole request instead.
 			//
-			// This includes 404s. They look like a verdict, but tag resolution
-			// is mutable and replicated, and in practice they are dominated by
-			// replication lag that clears in seconds.
+			// This includes 404s. They look like a verdict, but a reference can
+			// be mutable and registries may resolve it only eventually
+			// consistently, so a 404 does not establish that the artifact is
+			// absent.
 			systemErr = true
 			reqLog.Error("validate: aborting request",
 				"reason", reason,
