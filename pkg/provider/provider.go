@@ -78,11 +78,14 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 	var rstart = time.Now()
 	var err error
 
-	// Record the number of images (keys) in this request. Gatekeeper sends
-	// every image in a pod as a single request, so this captures the pod's
-	// image count. request_id/image_count/image_index are threaded through the
-	// per-image logs below so a single failure line (e.g. a fetch timeout) can
-	// be traced back to whether it was a solo or a large multi-image request.
+	// Record the number of images (keys) in this request. Gatekeeper forwards
+	// only the keys it could not serve from its response cache, so this is the
+	// request's cache-miss count, not the pod's image count: a multi-image pod
+	// whose entries expire at different times arrives as several separate
+	// single-image requests. request_id/image_count/image_index are threaded
+	// through the per-image logs below so a single failure line (e.g. a fetch
+	// timeout) can be traced back to whether it was a solo or a large
+	// multi-image request.
 	var imageCount = len(r.Request.Keys)
 
 	// systemErr marks a request the provider could not complete: a bundle

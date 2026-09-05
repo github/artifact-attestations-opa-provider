@@ -250,16 +250,22 @@ The metrics exposed beyond the default Prometheus metrics are:
   `descriptor`, `referrers`, `blob`, or `decode`), and `status` (the
   registry HTTP status code; `0` means no numeric status was recorded —
   the registry never responded, or its response carried no numeric status,
-  such as a diagnostic-only throttle).
+  such as a diagnostic-only throttle). Apart from `reason="bundle_invalid"`,
+  every increment corresponds to a request the provider aborted with a
+  system error. The invariant holds one way only: not every system error
+  increments this counter.
 * `aaop_attestations_verified_ok`: the total number of verified
   attestations.
 * `aaop_attestations_verified_fail`: the total number of
   attestations that failed to verify.
 * `aaop_attestations_request_timer`: the duration in seconds for
   the validation webhook. Labeled by `images` (the number of images/keys
-  in the request; Gatekeeper sends all of a pod's images in one request, so
-  this is the pod's image count — recorded exactly up to a small cap, with
-  larger counts folded into a `10+` bucket to keep cardinality bounded) and
+  in the request; Gatekeeper forwards only the keys it could not serve from
+  its response cache, so this is the request's cache-miss count rather than
+  the pod's image count — a multi-image pod whose entries expire at
+  different times arrives as several separate single-image requests.
+  Recorded exactly up to a small cap, with larger counts folded into a
+  `10+` bucket to keep cardinality bounded) and
   `outcome` (`success` when the provider produced a complete response of
   per-image verdicts, `failure` when it could not complete the request and
   returned a system error). Note that an image with a missing or invalid
