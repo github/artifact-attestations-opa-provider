@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http/httptrace"
@@ -185,11 +186,53 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				fields = append(fields, tc.Fields()...)
 			}
 			imgLog.Error("validate: error fetching bundles", fields...)
-			results = append(results, externaldata.Item{
-				Key:   key,
-				Error: "error_fetching_bundle_" + reason,
-			})
-			continue
+
+			// A bundle whose layer we read to completion and whose digest was
+			// verified, but which then failed a purely local JSON decode, is a
+			// deterministic snapshot of the artifact: no I/O remains that could
+			// make it flap. Report it per-image so the caller caches the denial
+			// instead of forcing a full fetch-and-decode on every retry.
+			//
+			// Deliberately narrower than "was addressed by digest": blob_error
+			// is also digest-addressed but mixes transport faults with content
+			// faults, so it must not be cached.
+			var fe *fetcher.FetchError
+			if errors.As(err, &fe) && fe.Kind == fetcher.KindBundleInvalid {
+				results = append(results, externaldata.Item{
+					Key:   key,
+					Error: "error_fetching_bundle_" + reason,
+				})
+				continue
+			}
+
+			// Every other fetch failure says nothing durable about the image,
+			// so it must not be reported as a per-image result: callers cache
+			// per-image outcomes and replay them, turning a momentary blip into
+			// a sustained failure. Abort the whole request instead.
+			//
+			// This includes 404s. They look like a verdict, but tag resolution
+			// is mutable and replicated, and in practice they are dominated by
+			// replication lag that clears in seconds.
+			reqLog.Error("validate: aborting request",
+				"reason", reason,
+				"step", step,
+				"image_index", i+1,
+				"images_processed", len(results),
+				"images_skipped", imageCount-(i+1))
+			// Stop here rather than fetching the remaining images: they share
+			// one already-depleted request budget, so they would most likely
+			// fail the same way and delay the response.
+			//
+			// Items completed earlier in this request are still returned. The
+			// caller caches per-image results, so returning them means a retry
+			// re-fetches only what is genuinely missing; the failing image is
+			// omitted precisely so it is NOT cached. Callers are expected to
+			// disregard items while a system error is set, so returning them
+			// cannot be acted on - it only avoids discarding completed work.
+			resp.Response.Items = results
+			resp.Response.SystemError = fmt.Sprintf(
+				"ERROR: BundleFromName(%q): reason=%s step=%s", key, reason, step)
+			return &resp
 		}
 
 		metrics.AttestationsRetrieved.Add(float64(len(result.Bundles)))
