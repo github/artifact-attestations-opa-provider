@@ -85,15 +85,18 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 	// be traced back to whether it was a solo or a large multi-image request.
 	var imageCount = len(r.Request.Keys)
 
-	// allOK tracks whether every image in the request verified cleanly. Any
-	// branch below that records an image error (or fails the whole request)
-	// clears it, so the request timer can be split into totally-successful vs
-	// not. It is declared before the deferred observe so the closure captures
-	// it, and read only at return.
-	allOK := true
+	// systemErr marks a request the provider could not complete: a bundle
+	// fetch failed, or - were either branch reachable - the keychain could not
+	// be built or verification itself errored. It drives the request timer's
+	// outcome, which reports whether the provider processed the request -
+	// deliberately not whether the images turned out to be properly attested.
+	// An unsigned or unverifiable image is a processed request: the provider
+	// did its job and the answer was "no". Declared before the deferred observe
+	// so the closure captures it, and read only at return.
+	systemErr := false
 	defer func() {
 		outcome := "success"
-		if !allOK {
+		if systemErr {
 			outcome = "failure"
 		}
 		metrics.AttestationsReqTimer.
@@ -110,8 +113,10 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 	// Get the keychain to be able to access the OCI registry.
 	// If the keychain configured is empty, the default keychain is used
 	// which works for public registries.
+	// Unreachable today: KeyChainProvider.KeyChain always returns a nil error.
+	// Retained because the interface permits one.
 	if kc, err = p.kc.KeyChain(ctx); err != nil {
-		allOK = false
+		systemErr = true
 		reqLog.Error("validate: error retrieving key chain",
 			"error", err)
 		return ErrorResponse(fmt.Sprintf("ERROR: KeyChain: %s", err))
@@ -129,7 +134,6 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 
 		imgLog.Info("validate: verify signature")
 		if ref, err = name.ParseReference(key); err != nil {
-			allOK = false
 			imgLog.Error("validate: error parsing reference",
 				"error", err)
 			results = append(results, externaldata.Item{
@@ -169,7 +173,6 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 			Observe(dur.Seconds())
 
 		if err != nil {
-			allOK = false
 			status := strconv.Itoa(fetcher.FailureStatus(err))
 			metrics.AttestationsRetrieveFail.WithLabelValues(reason, step, status).Inc()
 			// The connection-phase fields ride on the existing failure line, so
@@ -213,6 +216,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 			// This includes 404s. They look like a verdict, but tag resolution
 			// is mutable and replicated, and in practice they are dominated by
 			// replication lag that clears in seconds.
+			systemErr = true
 			reqLog.Error("validate: aborting request",
 				"reason", reason,
 				"step", step,
@@ -251,7 +255,6 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		imgLog.Info("validate: fetched OCI bundles", fetchedFields...)
 
 		if len(result.Bundles) == 0 {
-			allOK = false
 			metrics.AttestationsMissing.Inc()
 			imgLog.Info("validate: no bundles")
 			results = append(results, externaldata.Item{
@@ -271,8 +274,10 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 			metrics.AttestationsVerFail.Add(float64(fail))
 		}
 
+		// Unreachable today: both production Verifier implementations always
+		// return a nil error. Retained because the interface permits one.
 		if err != nil {
-			allOK = false
+			systemErr = true
 			imgLog.Error("validate: verification error",
 				"image_digest", result.Hash.Hex,
 				"error", err)
@@ -288,7 +293,6 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				Value: res,
 			})
 		} else {
-			allOK = false
 			imgLog.Info("validate: no valid signatures")
 			results = append(results, externaldata.Item{
 				Key:   key,

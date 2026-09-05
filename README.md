@@ -260,8 +260,14 @@ The metrics exposed beyond the default Prometheus metrics are:
   in the request; Gatekeeper sends all of a pod's images in one request, so
   this is the pod's image count — recorded exactly up to a small cap, with
   larger counts folded into a `10+` bucket to keep cardinality bounded) and
-  `outcome` (`success` when every image verified cleanly, otherwise
-  `failure`). Because this is a histogram vector, the total request count is
+  `outcome` (`success` when the provider produced a complete response of
+  per-image verdicts, `failure` when it could not complete the request and
+  returned a system error). Note that an image with a missing or invalid
+  attestation is a `success`: the provider did its job and returned a
+  verdict of "no". Per-image outcomes are counted by
+  `aaop_attestations_missing_total`, `aaop_attestations_verified_fail`, and
+  `aaop_attestations_retrieved_fail`. Because this is a histogram vector,
+  the total request count is
   the sum of the `_count` series across all label values (e.g.
   `sum(aaop_attestations_request_timer_count)`); the `images` label carries
   the per-request image-count distribution (e.g. single-image vs.

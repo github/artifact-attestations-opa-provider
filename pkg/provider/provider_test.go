@@ -31,8 +31,9 @@ import (
 )
 
 const (
-	validImageName  = "ghcr.io/github/artifact-attestations-opa-provider:latest"
-	brokenImageName = "ghcr.io/github/artifact-attestations-opa-provider:broken"
+	validImageName    = "ghcr.io/github/artifact-attestations-opa-provider:latest"
+	brokenImageName   = "ghcr.io/github/artifact-attestations-opa-provider:broken"
+	unsignedImageName = "ghcr.io/github/artifact-attestations-opa-provider:unsigned"
 )
 
 var okBundle = `
@@ -600,6 +601,59 @@ func TestValidateRecordsRequestOutcome(t *testing.T) {
 	})
 	assert.Equal(t, uint64(1), observeCount(t, failChild)-beforeFail,
 		"a request with a failed image should observe the failure child once")
+}
+
+// TestValidateRequestOutcomeReportsProcessing verifies the request timer's
+// outcome reports whether the provider completed the request, not whether the
+// images were properly attested. Every per-image verdict branch is covered, so
+// each deleted allOK assignment is pinned by an assertion.
+func TestValidateRequestOutcomeReportsProcessing(t *testing.T) {
+	successChild := metrics.AttestationsReqTimer.WithLabelValues("1", "success")
+	failChild := metrics.AttestationsReqTimer.WithLabelValues("1", "failure")
+
+	// Each of these is a verdict about the image, so the request WAS processed.
+	verdicts := []struct {
+		name    string
+		key     string
+		verify  Verifier
+		fetcher BundleFetcher
+	}{
+		// name.ParseReference fails -> invalid_reference (provider.go:131)
+		{"invalid_reference", "foo+bar", &mockVerifier{}, &mockBundleFetcher{}},
+		// fetch succeeds with zero bundles -> image_unsigned (provider.go:211)
+		{"image_unsigned", unsignedImageName, &mockVerifier{}, &mockBundleFetcher{}},
+		// bundles fetched, none verify -> invalid_signature (provider.go:248)
+		{"invalid_signature", validImageName, &mockVerifier{}, &mockBundleFetcher{}},
+		// decoded-by-digest failure -> error_fetching_bundle_bundle_invalid
+		{"bundle_invalid", validImageName, &mockVerifier{}, &bundleInvalidFetcher{}},
+	}
+
+	for _, tc := range verdicts {
+		t.Run(tc.name, func(t *testing.T) {
+			before := observeCount(t, successChild)
+			p := New(tc.verify, &mockKeyChainProvider{}, tc.fetcher)
+			p.Validate(context.Background(), &externaldata.ProviderRequest{
+				APIVersion: apiVersion,
+				Kind:       "ProviderRequest",
+				Request:    externaldata.Request{Keys: []string{tc.key}},
+			})
+			assert.Equal(t, uint64(1), observeCount(t, successChild)-before,
+				"a per-image verdict is a processed request, not a provider failure")
+		})
+	}
+
+	// A fetch failure aborts the request: the provider could not complete it.
+	t.Run("fetch failure", func(t *testing.T) {
+		beforeFail := observeCount(t, failChild)
+		provAbort := New(&mockVerifier{}, &mockKeyChainProvider{}, &timeoutBundleFetcher{})
+		provAbort.Validate(context.Background(), &externaldata.ProviderRequest{
+			APIVersion: apiVersion,
+			Kind:       "ProviderRequest",
+			Request:    externaldata.Request{Keys: []string{validImageName}},
+		})
+		assert.Equal(t, uint64(1), observeCount(t, failChild)-beforeFail,
+			"an aborted request should observe the failure child once")
+	})
 }
 
 // TestValidateCountsKeychainErrorRequest verifies the request timer still counts
