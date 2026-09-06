@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/google/go-containerregistry/pkg/v1"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/uuid"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/externaldata"
@@ -78,23 +78,17 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 	var rstart = time.Now()
 	var err error
 
-	// Record the number of images (keys) in this request. Gatekeeper forwards
-	// only the keys it could not serve from its response cache, so this is the
-	// request's cache-miss count, not the pod's image count: a multi-image pod
-	// whose entries expire at different times arrives as several separate
-	// single-image requests. request_id/image_count/image_index are threaded
+	// Record the number of images (keys) in this request.
+	// request_id/image_count/image_index are threaded
 	// through the per-image logs below so a single failure line (e.g. a fetch
 	// timeout) can be traced back to whether it was a solo or a large
 	// multi-image request.
 	var imageCount = len(r.Request.Keys)
 
 	// systemErr marks a request the provider could not complete: a bundle
-	// fetch failed, or - were either branch reachable - the keychain could not
-	// be built or verification itself errored. It drives the request timer's
-	// outcome, which reports whether the provider processed the request -
-	// deliberately not whether the images turned out to be properly attested.
-	// An unsigned or unverifiable image is a processed request: the provider
-	// did its job and the answer was "no". Declared before the deferred observe
+	// fetch failed. It drives the request timer's outcome, which reports
+	// whether the provider processed the request - NOT whether the images
+	// turned out to be properly attested. Declared before the deferred observe
 	// so the closure captures it, and read only at return.
 	systemErr := false
 	defer func() {
@@ -116,8 +110,6 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 	// Get the keychain to be able to access the OCI registry.
 	// If the keychain configured is empty, the default keychain is used
 	// which works for public registries.
-	// Unreachable today: KeyChainProvider.KeyChain always returns a nil error.
-	// Retained because the interface permits one.
 	if kc, err = p.kc.KeyChain(ctx); err != nil {
 		systemErr = true
 		reqLog.Error("validate: error retrieving key chain",
@@ -195,13 +187,8 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 
 			// A bundle whose layer we read to completion and whose digest was
 			// verified, but which then failed a purely local JSON decode, is a
-			// deterministic snapshot of the artifact: no I/O remains that could
-			// make it flap. Report it per-image so the caller caches the denial
-			// instead of forcing a full fetch-and-decode on every retry.
-			//
-			// Deliberately narrower than "was addressed by digest": blob_error
-			// is also digest-addressed but mixes transport faults with content
-			// faults, so it must not be cached.
+			// deterministic snapshot of the artifact. Report it per-image so
+			// the caller caches the denial.
 			var fe *fetcher.FetchError
 			if errors.As(err, &fe) && fe.Kind == fetcher.KindBundleInvalid {
 				results = append(results, externaldata.Item{
@@ -212,14 +199,12 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 			}
 
 			// Every other fetch failure says nothing durable about the image,
-			// so it must not be reported as a per-image result: callers cache
-			// per-image outcomes and replay them, turning a momentary blip into
-			// a sustained failure. Abort the whole request instead.
+			// so it must not be reported as a per-image result. Abort the
+			// whole request instead.
 			//
-			// This includes 404s. They look like a verdict, but a reference can
-			// be mutable and registries may resolve it only eventually
-			// consistently, so a 404 does not establish that the artifact is
-			// absent.
+			// This includes 404s. A reference can be mutable and registries may
+			// resolve it eventually, so a 404 does not establish that the
+			// artifact is absent.
 			systemErr = true
 			reqLog.Error("validate: aborting request",
 				"reason", reason,
@@ -228,15 +213,12 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				"images_processed", len(results),
 				"images_skipped", imageCount-(i+1))
 			// Stop here rather than fetching the remaining images: they share
-			// one already-depleted request budget, so they would most likely
-			// fail the same way and delay the response.
+			// one request budget, so they would most likely fail the same way
+			// and delay the response.
 			//
 			// Items completed earlier in this request are still returned. The
 			// caller caches per-image results, so returning them means a retry
-			// re-fetches only what is genuinely missing; the failing image is
-			// omitted precisely so it is NOT cached. Callers are expected to
-			// disregard items while a system error is set, so returning them
-			// cannot be acted on - it only avoids discarding completed work.
+			// re-fetches only what is genuinely missing.
 			resp.Response.Items = results
 			resp.Response.SystemError = fmt.Sprintf(
 				"ERROR: BundleFromName(%q): reason=%s step=%s", key, reason, step)
@@ -278,8 +260,6 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 			metrics.AttestationsVerFail.Add(float64(fail))
 		}
 
-		// Unreachable today: both production Verifier implementations always
-		// return a nil error. Retained because the interface permits one.
 		if err != nil {
 			systemErr = true
 			imgLog.Error("validate: verification error",
