@@ -254,11 +254,6 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		res, err = p.v.Verify(result.Bundles, result.Hash)
 		dur = time.Since(start)
 		metrics.AttestationsVerTimer.Observe(dur.Seconds())
-		metrics.AttestationsVerOk.Add(float64(len(res)))
-		var fail = len(result.Bundles) - len(res)
-		if fail > 0 {
-			metrics.AttestationsVerFail.Add(float64(fail))
-		}
 
 		if err != nil {
 			systemErr = true
@@ -266,6 +261,16 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				"image_digest", result.Hash.Hex,
 				"error", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: VerifyImageSignatures(%q): %v", key, err))
+		}
+
+		// Counted only once the error is ruled out. An erroring Verify returns
+		// no results, so counting first would derive fail from an empty res and
+		// report every bundle as having failed verification when in fact none
+		// was verified at all.
+		metrics.AttestationsVerOk.Add(float64(len(res)))
+		var fail = len(result.Bundles) - len(res)
+		if fail > 0 {
+			metrics.AttestationsVerFail.Add(float64(fail))
 		}
 
 		var bundleVerified = len(res) > 0

@@ -561,6 +561,16 @@ func (*errKeyChainProvider) KeyChain(_ context.Context) (authn.Keychain, error) 
 	return nil, errors.New("keychain boom")
 }
 
+// errVerifier reports that verification could not be performed, returning no
+// results alongside the error as a Go implementation conventionally would. No
+// production Verifier does this today, but the interface permits it and the
+// provider must not mistake it for a verdict about the attestations.
+type errVerifier struct{}
+
+func (*errVerifier) Verify(_ []*bundle.Bundle, _ *v1.Hash) ([]*verify.VerificationResult, error) {
+	return nil, errors.New("verify boom")
+}
+
 // TestImageCountLabel verifies the request timer's images label is bounded: the
 // exact count up to the cap, and a single overflow bucket beyond it, so an
 // unbounded key count cannot grow histogram cardinality without limit.
@@ -716,6 +726,34 @@ func TestValidateCountsKeychainErrorRequest(t *testing.T) {
 
 	assert.Equal(t, uint64(1), observeCount(t, child)-before,
 		"the keychain-error request should be observed once as a failure")
+}
+
+// TestValidateSkipsVerdictCountersWhenVerificationErrors pins the ordering of
+// the verification counters against the error check. When Verify returns an
+// error it returns no results, so recording verdicts first would compute
+// fail = len(bundles) - 0 and attribute a failed verification to every bundle
+// in the request - reporting a fault that stopped verification from running as
+// attestations that were checked and rejected. That is the same mistake this
+// provider avoids on the fetch path, one layer down.
+func TestValidateSkipsVerdictCountersWhenVerificationErrors(t *testing.T) {
+	beforeOK := testutil.ToFloat64(metrics.AttestationsVerOk)
+	beforeFail := testutil.ToFloat64(metrics.AttestationsVerFail)
+
+	// mockBundleFetcher returns one bundle for validImageName, so a
+	// count-before-check would record exactly one bogus failure.
+	provider := New(&errVerifier{}, &mockKeyChainProvider{}, &mockBundleFetcher{})
+	resp := provider.Validate(context.Background(), &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request:    externaldata.Request{Keys: []string{validImageName}},
+	})
+	require.NotEmpty(t, resp.Response.SystemError,
+		"a verification error should be a system error")
+
+	assert.InDelta(t, 0.0, testutil.ToFloat64(metrics.AttestationsVerFail)-beforeFail, 0.0001,
+		"a verification that could not run must not count any bundle as failed")
+	assert.InDelta(t, 0.0, testutil.ToFloat64(metrics.AttestationsVerOk)-beforeOK, 0.0001,
+		"nor as verified")
 }
 
 // TestValidateLogsImageContext verifies that per-image log lines carry the
