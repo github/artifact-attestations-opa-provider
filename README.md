@@ -250,34 +250,21 @@ The metrics exposed beyond the default Prometheus metrics are:
   `descriptor`, `referrers`, `blob`, or `decode`), and `status` (the
   registry HTTP status code; `0` means no numeric status was recorded —
   the registry never responded, or its response carried no numeric status,
-  such as a diagnostic-only throttle). Apart from `reason="bundle_invalid"`,
-  every increment corresponds to a request the provider aborted with a
-  system error. The invariant holds one way only: not every system error
-  increments this counter.
+  such as a diagnostic-only throttle).
 * `aaop_attestations_verified_ok`: the total number of verified
   attestations.
 * `aaop_attestations_verified_fail`: the total number of
   attestations that failed to verify.
 * `aaop_attestations_request_timer`: the duration in seconds for
   the validation webhook. Labeled by `images` (the number of images/keys
-  in the request; Gatekeeper forwards only the keys it could not serve from
-  its response cache, so this is the request's cache-miss count rather than
-  the pod's image count — a multi-image pod whose entries expire at
-  different times arrives as several separate single-image requests.
-  Recorded exactly up to a small cap, with larger counts folded into a
-  `10+` bucket to keep cardinality bounded) and
+  in the request; Recorded exactly up to a small cap, with larger counts
+  folded into a `10+` bucket to keep cardinality bounded) and
   `outcome` (`success` when the provider produced a complete response of
   per-image verdicts, `failure` when it could not complete the request and
-  returned a system error). Note that an image with a missing or invalid
-  attestation is a `success`: the provider did its job and returned a
-  verdict of "no". Per-image outcomes are counted by
-  `aaop_attestations_missing_total`, `aaop_attestations_verified_fail`, and
-  `aaop_attestations_retrieved_fail`. Because this is a histogram vector,
-  the total request count is
-  the sum of the `_count` series across all label values (e.g.
+  returned a system error). Because this is a histogram vector, the total
+  request count is the sum of the `_count` series across all label values (e.g.
   `sum(aaop_attestations_request_timer_count)`); the `images` label carries
-  the distribution of key counts per request, which is not the same as the
-  distribution of images per pod.
+  the distribution of key counts per request.
 * `aaop_attestations_retrieved_timer`: the duration in seconds to fetch
   the attestations for a single image from the OCI registry, recorded for
   both successful and failed fetches. Labeled by `outcome` (`success` or
