@@ -37,12 +37,15 @@ type TraceCollector struct {
 
 	// Most-recent-connection fields, reset per request at GetConn.
 	lastReused bool
-	lastIdle   time.Duration
-	dns        time.Duration
-	connect    time.Duration
-	tls        time.Duration
-	ttfb       time.Duration // GotConn to first response byte; -1 if never.
-	wroteReq   bool
+	// lastIdle is only meaningful when lastReused is true; otherwise it holds
+	// durationUnset, since a connection that was never reused has no idle
+	// time to report.
+	lastIdle time.Duration
+	dns      time.Duration
+	connect  time.Duration
+	tls      time.Duration
+	ttfb     time.Duration // GotConn to first response byte; -1 if never.
+	wroteReq bool
 
 	// Transient phase-start timestamps.
 	dnsStart  time.Time
@@ -58,10 +61,11 @@ type TraceCollector struct {
 // millisecond.
 func NewTraceCollector() *TraceCollector {
 	return &TraceCollector{
-		dns:     durationUnset,
-		connect: durationUnset,
-		tls:     durationUnset,
-		ttfb:    durationUnset,
+		dns:      durationUnset,
+		connect:  durationUnset,
+		tls:      durationUnset,
+		ttfb:     durationUnset,
+		lastIdle: durationUnset,
 	}
 }
 
@@ -83,7 +87,7 @@ func (c *TraceCollector) Trace() *httptrace.ClientTrace {
 			c.tls = durationUnset
 			c.wroteReq = false
 			c.lastReused = false
-			c.lastIdle = 0
+			c.lastIdle = durationUnset
 			c.gotConnAt = time.Time{}
 			c.mu.Unlock()
 		},
@@ -180,7 +184,7 @@ func (c *TraceCollector) Fields() []any {
 		"conns_reused", c.reusedConns,
 		"conns_new", c.newConns,
 		"last_conn_reused", c.lastReused,
-		"last_conn_idle_ms", c.lastIdle.Milliseconds(),
+		"last_conn_idle_ms", ms(c.lastIdle),
 		"dns_ms", ms(c.dns),
 		"connect_ms", ms(c.connect),
 		"tls_ms", ms(c.tls),
