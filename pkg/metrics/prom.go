@@ -64,7 +64,7 @@ var (
 	//nolint: revive
 	AttestationsReqTimer = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "aaop_attestations_request_timer",
-		Help:    "The duration (seconds) for the entire request processing, labelled by image count and outcome (whether every image verified cleanly)",
+		Help:    "The duration (seconds) for the entire request processing, labelled by image count and outcome. success means the provider produced a complete response of per-image verdicts (an image may still be unsigned or unverifiable); failure means the provider could not complete the request and returned a system error",
 		Buckets: requestBuckets,
 	}, []string{"images", "outcome"})
 

@@ -257,15 +257,14 @@ The metrics exposed beyond the default Prometheus metrics are:
   attestations that failed to verify.
 * `aaop_attestations_request_timer`: the duration in seconds for
   the validation webhook. Labeled by `images` (the number of images/keys
-  in the request; Gatekeeper sends all of a pod's images in one request, so
-  this is the pod's image count — recorded exactly up to a small cap, with
-  larger counts folded into a `10+` bucket to keep cardinality bounded) and
-  `outcome` (`success` when every image verified cleanly, otherwise
-  `failure`). Because this is a histogram vector, the total request count is
-  the sum of the `_count` series across all label values (e.g.
+  in the request; recorded exactly up to a small cap, with larger counts
+  folded into a `10+` bucket to keep cardinality bounded) and
+  `outcome` (`success` when the provider produced a complete response of
+  per-image verdicts, `failure` when it could not complete the request and
+  returned a system error). Because this is a histogram vector, the total
+  request count is the sum of the `_count` series across all label values (e.g.
   `sum(aaop_attestations_request_timer_count)`); the `images` label carries
-  the per-request image-count distribution (e.g. single-image vs.
-  multi-image pods).
+  the distribution of key counts per request.
 * `aaop_attestations_retrieved_timer`: the duration in seconds to fetch
   the attestations for a single image from the OCI registry, recorded for
   both successful and failed fetches. Labeled by `outcome` (`success` or
