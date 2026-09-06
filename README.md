@@ -257,7 +257,7 @@ The metrics exposed beyond the default Prometheus metrics are:
   attestations that failed to verify.
 * `aaop_attestations_request_timer`: the duration in seconds for
   the validation webhook. Labeled by `images` (the number of images/keys
-  in the request; Recorded exactly up to a small cap, with larger counts
+  in the request; recorded exactly up to a small cap, with larger counts
   folded into a `10+` bucket to keep cardinality bounded) and
   `outcome` (`success` when the provider produced a complete response of
   per-image verdicts, `failure` when it could not complete the request and
