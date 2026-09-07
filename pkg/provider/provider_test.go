@@ -31,8 +31,9 @@ import (
 )
 
 const (
-	validImageName  = "ghcr.io/github/artifact-attestations-opa-provider:latest"
-	brokenImageName = "ghcr.io/github/artifact-attestations-opa-provider:broken"
+	validImageName    = "ghcr.io/github/artifact-attestations-opa-provider:latest"
+	brokenImageName   = "ghcr.io/github/artifact-attestations-opa-provider:broken"
+	unsignedImageName = "ghcr.io/github/artifact-attestations-opa-provider:unsigned"
 )
 
 var okBundle = `
@@ -230,10 +231,6 @@ func TestInvalid(t *testing.T) {
 			image: "foo+bar",
 			error: "invalid_reference",
 		},
-		{
-			image: brokenImageName,
-			error: "error_fetching_bundle_unknown",
-		},
 	}
 
 	for _, tc := range tests {
@@ -252,6 +249,33 @@ func TestInvalid(t *testing.T) {
 		assert.Len(t, response.Response.Items, 1)
 		assert.Equal(t, tc.error, response.Response.Items[0].Error)
 	}
+}
+
+// TestUnclassifiedFetchErrorAbortsRequest covers the case lifted out of
+// TestInvalid's table. mockBundleFetcher fails brokenImageName with a raw json
+// error, which classifies as "unknown" rather than bundle_invalid, so it is an
+// ordinary fetch failure that aborts the request rather than the cached
+// per-image exception. Despite the fixture's name, this does NOT exercise the
+// bundle_invalid path; that is pinned by
+// TestValidateKeepsBundleInvalidAsItemError.
+func TestUnclassifiedFetchErrorAbortsRequest(t *testing.T) {
+	v, err := verifier.GHVerifier("")
+	require.NoError(t, err)
+	provider := New(v, &mockKeyChainProvider{}, &mockBundleFetcher{})
+
+	response := provider.Validate(context.Background(), &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{brokenImageName},
+		},
+	})
+
+	require.NotNil(t, response)
+	assert.NotEmpty(t, response.Response.SystemError,
+		"an unclassified fetch failure must abort the request")
+	assert.Empty(t, response.Response.Items,
+		"no item may be returned, or the caller will cache the failure")
 }
 
 // notFoundBundleFetcher always fails with a 404 (MANIFEST_UNKNOWN) fetch
@@ -288,30 +312,226 @@ func (*canceledBundleFetcher) BundleFromName(_ context.Context, _ name.Reference
 	}
 }
 
-func TestVerifyNotFound(t *testing.T) {
-	v := &mockVerifier{}
-	kc := &mockKeyChainProvider{}
-	bf := &notFoundBundleFetcher{}
-	provider := New(v, kc, bf)
+// oneResultVerifier reports one successful verification, so an image whose
+// fetch succeeds produces a clean item. mockVerifier returns (nil, nil), which
+// with mockBundleFetcher's single bundle yields invalid_signature and would
+// defeat the retain assertions.
+type oneResultVerifier struct{}
 
-	before := testutil.ToFloat64(metrics.AttestationsRetrieveFail.WithLabelValues("not_found", "descriptor", "404"))
+func (*oneResultVerifier) Verify(_ []*bundle.Bundle, _ *v1.Hash) ([]*verify.VerificationResult, error) {
+	return []*verify.VerificationResult{{
+		MediaType: "application/vnd.dev.sigstore.verificationresult+json;version=0.1",
+	}}, nil
+}
 
-	request := &externaldata.ProviderRequest{
+// timeoutBundleFetcher fails with a timeout that carries no registry response.
+type timeoutBundleFetcher struct {
+	mockBundleFetcher
+	calls int
+}
+
+func (f *timeoutBundleFetcher) BundleFromName(_ context.Context, _ name.Reference, _ []remote.Option) (fetcher.BundleResult, error) {
+	f.calls++
+	return fetcher.BundleResult{Attempts: 3}, &fetcher.FetchError{
+		Step:        fetcher.StepReferrers,
+		Kind:        fetcher.KindTimeout,
+		Attempts:    3,
+		Recoverable: true,
+		Err:         errors.New("timeout awaiting response headers"),
+	}
+}
+
+// okThenTimeoutFetcher succeeds on the first image and then fails, exercising
+// the retain-verified-items path.
+type okThenTimeoutFetcher struct {
+	mockBundleFetcher
+	calls int
+}
+
+func (f *okThenTimeoutFetcher) BundleFromName(ctx context.Context, ref name.Reference, ro []remote.Option) (fetcher.BundleResult, error) {
+	f.calls++
+	if f.calls == 1 {
+		return f.mockBundleFetcher.BundleFromName(ctx, ref, ro)
+	}
+	return fetcher.BundleResult{Attempts: 3}, &fetcher.FetchError{
+		Step:        fetcher.StepReferrers,
+		Kind:        fetcher.KindTimeout,
+		Attempts:    3,
+		Recoverable: true,
+		Err:         errors.New("timeout awaiting response headers"),
+	}
+}
+
+// TestValidateReturnsSystemErrorOnFetchFailure verifies that a fetch failure
+// aborts the request with a system error and no items, so the caller has
+// nothing cacheable to replay.
+func TestValidateReturnsSystemErrorOnFetchFailure(t *testing.T) {
+	provider := New(&mockVerifier{}, &mockKeyChainProvider{}, &timeoutBundleFetcher{})
+
+	resp := provider.Validate(context.Background(), &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request:    externaldata.Request{Keys: []string{validImageName}},
+	})
+
+	assert.NotEmpty(t, resp.Response.SystemError,
+		"a fetch failure must surface as a system error")
+	assert.Empty(t, resp.Response.Items,
+		"no items may be returned, or the caller will cache the failure")
+	assert.Contains(t, resp.Response.SystemError, "timeout")
+	assert.Contains(t, resp.Response.SystemError, "referrers")
+}
+
+// TestValidateAbortsRemainingImages verifies fail-fast: once the request is
+// known to return a system error, later images are not fetched at all.
+func TestValidateAbortsRemainingImages(t *testing.T) {
+	bf := &timeoutBundleFetcher{}
+	provider := New(&mockVerifier{}, &mockKeyChainProvider{}, bf)
+
+	provider.Validate(context.Background(), &externaldata.ProviderRequest{
 		APIVersion: apiVersion,
 		Kind:       "ProviderRequest",
 		Request: externaldata.Request{
-			Keys: []string{validImageName},
+			Keys: []string{validImageName, brokenImageName, validImageName},
 		},
+	})
+
+	assert.Equal(t, 1, bf.calls,
+		"the request must abort on the first fetch failure, not fetch the remaining images")
+}
+
+// TestValidateLogsAbortContext verifies the request-level abort line and its
+// fields, which are the operational signal that a request was not completed.
+//
+// The keys are chosen so images_processed is non-zero and its contents are an
+// error item, pinning that it counts every item appended so far - including
+// per-image error verdicts - and is not a count of clean verifications.
+func TestValidateLogsAbortContext(t *testing.T) {
+	provider := New(&mockVerifier{}, &mockKeyChainProvider{}, &timeoutBundleFetcher{})
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(prev)
+
+	// "foo+bar" is unparseable, so it appends an invalid_reference item without
+	// fetching. The second key then fails to fetch and aborts, leaving the
+	// third key untouched.
+	provider.Validate(context.Background(), &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request: externaldata.Request{
+			Keys: []string{"foo+bar", validImageName, brokenImageName},
+		},
+	})
+
+	abort := lastLogLine(t, &buf, "validate: aborting request")
+	require.NotNil(t, abort, "an aborted request must log a request-level abort line")
+
+	assert.Equal(t, "timeout", abort["reason"])
+	assert.Equal(t, "referrers", abort["step"])
+	// JSON numbers decode as float64.
+	assert.InDelta(t, 2.0, abort["image_index"], 0.0001,
+		"the abort should report the 1-based position of the failing image")
+	assert.InDelta(t, 1.0, abort["images_processed"], 0.0001,
+		"images_processed counts every item appended so far, including error items")
+	assert.InDelta(t, 1.0, abort["images_skipped"], 0.0001,
+		"the images after the failure are skipped, not fetched")
+	assert.NotEmpty(t, abort["request_id"],
+		"the abort line should carry the request's correlation id")
+}
+
+// TestValidateRetainsVerifiedItemsOnAbort verifies that images verified before
+// the abort are still returned. They are cacheable by the caller, so a retry
+// re-fetches only the images that are genuinely missing.
+func TestValidateRetainsVerifiedItemsOnAbort(t *testing.T) {
+	okThenTimeout := &okThenTimeoutFetcher{}
+	provider := New(&oneResultVerifier{}, &mockKeyChainProvider{}, okThenTimeout)
+
+	resp := provider.Validate(context.Background(), &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request:    externaldata.Request{Keys: []string{validImageName, brokenImageName}},
+	})
+
+	assert.NotEmpty(t, resp.Response.SystemError)
+	require.Len(t, resp.Response.Items, 1,
+		"the image verified before the abort should still be returned")
+	assert.Equal(t, validImageName, resp.Response.Items[0].Key)
+	assert.Empty(t, resp.Response.Items[0].Error,
+		"the retained item is a clean result, not the failure")
+}
+
+// TestValidateAbortsOnNotFound pins the decision that a 404 is NOT treated as a
+// cacheable per-image verdict. A reference can be mutable and a registry may
+// resolve it only eventually consistently, so a 404 does not establish that the
+// artifact is absent and caching the denial could outlive its cause. It also
+// pins that the failure counter still increments before the abort, so the
+// failure taxonomy survives the change.
+func TestValidateAbortsOnNotFound(t *testing.T) {
+	failCounter := metrics.AttestationsRetrieveFail.WithLabelValues("not_found", "descriptor", "404")
+	before := testutil.ToFloat64(failCounter)
+
+	provider := New(&mockVerifier{}, &mockKeyChainProvider{}, &notFoundBundleFetcher{})
+
+	resp := provider.Validate(context.Background(), &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request:    externaldata.Request{Keys: []string{validImageName}},
+	})
+
+	assert.NotEmpty(t, resp.Response.SystemError,
+		"a 404 must abort, not become a cached item error")
+	assert.Empty(t, resp.Response.Items)
+
+	after := testutil.ToFloat64(failCounter)
+	assert.InDelta(t, 1.0, after-before, 0.0001,
+		"the fetch-failure counter must still increment before the abort")
+}
+
+// bundleInvalidFetcher fails with a decode error on a blob that was fetched
+// successfully by digest.
+type bundleInvalidFetcher struct {
+	mockBundleFetcher
+}
+
+func (*bundleInvalidFetcher) BundleFromName(_ context.Context, _ name.Reference, _ []remote.Option) (fetcher.BundleResult, error) {
+	// Attempts must be set on the FetchError, not just on the BundleResult:
+	// Classify reads it from the error (bundle.go:637-648), so omitting it
+	// emits a misleading attempts="0" label.
+	return fetcher.BundleResult{Attempts: 1}, &fetcher.FetchError{
+		Step:        fetcher.StepDecode,
+		Kind:        fetcher.KindBundleInvalid,
+		Attempts:    1,
+		Recoverable: false,
+		Err:         errors.New("invalid character 'x' looking for beginning of value"),
 	}
+}
 
-	response := provider.Validate(context.Background(), request)
-	require.NotNil(t, response)
-	assert.Len(t, response.Response.Items, 1)
-	assert.Equal(t, "error_fetching_bundle_not_found", response.Response.Items[0].Error)
-	assert.Empty(t, response.Response.SystemError)
+// TestValidateKeepsBundleInvalidAsItemError pins the single exception: the
+// layer was read to completion and digest-verified, and only the local JSON
+// decode failed, so no I/O remains that could make the outcome flap within a
+// cache TTL. Caching it is correct, and NOT caching it would force a full
+// fetch-and-decode on every controller retry.
+//
+// This is deliberately narrower than "was addressed by digest" - blob_error is
+// also digest-addressed but mixes transport with content faults.
+//
+// Note this cannot be exercised through mockBundleFetcher's brokenImageName,
+// which returns a raw json error that classifies as "unknown".
+func TestValidateKeepsBundleInvalidAsItemError(t *testing.T) {
+	provider := New(&mockVerifier{}, &mockKeyChainProvider{}, &bundleInvalidFetcher{})
 
-	after := testutil.ToFloat64(metrics.AttestationsRetrieveFail.WithLabelValues("not_found", "descriptor", "404"))
-	assert.InDelta(t, 1.0, after-before, 0.0001, `fail metric should be labeled reason="not_found" step="descriptor" status="404"`)
+	resp := provider.Validate(context.Background(), &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request:    externaldata.Request{Keys: []string{validImageName}},
+	})
+
+	assert.Empty(t, resp.Response.SystemError,
+		"a completed, digest-verified decode failure is a verdict, not a provider fault")
+	require.Len(t, resp.Response.Items, 1)
+	assert.Equal(t, "error_fetching_bundle_bundle_invalid", resp.Response.Items[0].Error)
 }
 
 // TestValidateLabelsFetchFailureCounter verifies the fetch-failure counter is
@@ -339,6 +559,16 @@ type errKeyChainProvider struct{}
 
 func (*errKeyChainProvider) KeyChain(_ context.Context) (authn.Keychain, error) {
 	return nil, errors.New("keychain boom")
+}
+
+// errVerifier reports that verification could not be performed, returning no
+// results alongside the error as a Go implementation conventionally would. No
+// production Verifier does this today, but the interface permits it and the
+// provider must not mistake it for a verdict about the attestations.
+type errVerifier struct{}
+
+func (*errVerifier) Verify(_ []*bundle.Bundle, _ *v1.Hash) ([]*verify.VerificationResult, error) {
+	return nil, errors.New("verify boom")
 }
 
 // TestImageCountLabel verifies the request timer's images label is bounded: the
@@ -413,6 +643,8 @@ func TestValidateRecordsRequestOutcome(t *testing.T) {
 		"an all-clean request should observe the success child once")
 
 	// A request whose image fails to fetch is not totally successful.
+	// The label survived a meaning change: the 404 now lands on "failure"
+	// because it returns a system error rather than a per-image item error.
 	beforeFail := observeCount(t, failChild)
 	provFail := New(&mockVerifier{}, &mockKeyChainProvider{}, &notFoundBundleFetcher{})
 	provFail.Validate(context.Background(), &externaldata.ProviderRequest{
@@ -422,6 +654,59 @@ func TestValidateRecordsRequestOutcome(t *testing.T) {
 	})
 	assert.Equal(t, uint64(1), observeCount(t, failChild)-beforeFail,
 		"a request with a failed image should observe the failure child once")
+}
+
+// TestValidateRequestOutcomeReportsProcessing verifies the request timer's
+// outcome reports whether the provider completed the request, not whether the
+// images were properly attested. Every per-image verdict branch is covered, so
+// each deleted allOK assignment is pinned by an assertion.
+func TestValidateRequestOutcomeReportsProcessing(t *testing.T) {
+	successChild := metrics.AttestationsReqTimer.WithLabelValues("1", "success")
+	failChild := metrics.AttestationsReqTimer.WithLabelValues("1", "failure")
+
+	// Each of these is a verdict about the image, so the request WAS processed.
+	verdicts := []struct {
+		name    string
+		key     string
+		verify  Verifier
+		fetcher BundleFetcher
+	}{
+		// name.ParseReference fails -> invalid_reference (provider.go:131)
+		{"invalid_reference", "foo+bar", &mockVerifier{}, &mockBundleFetcher{}},
+		// fetch succeeds with zero bundles -> image_unsigned (provider.go:211)
+		{"image_unsigned", unsignedImageName, &mockVerifier{}, &mockBundleFetcher{}},
+		// bundles fetched, none verify -> invalid_signature (provider.go:248)
+		{"invalid_signature", validImageName, &mockVerifier{}, &mockBundleFetcher{}},
+		// decoded-by-digest failure -> error_fetching_bundle_bundle_invalid
+		{"bundle_invalid", validImageName, &mockVerifier{}, &bundleInvalidFetcher{}},
+	}
+
+	for _, tc := range verdicts {
+		t.Run(tc.name, func(t *testing.T) {
+			before := observeCount(t, successChild)
+			p := New(tc.verify, &mockKeyChainProvider{}, tc.fetcher)
+			p.Validate(context.Background(), &externaldata.ProviderRequest{
+				APIVersion: apiVersion,
+				Kind:       "ProviderRequest",
+				Request:    externaldata.Request{Keys: []string{tc.key}},
+			})
+			assert.Equal(t, uint64(1), observeCount(t, successChild)-before,
+				"a per-image verdict is a processed request, not a provider failure")
+		})
+	}
+
+	// A fetch failure aborts the request: the provider could not complete it.
+	t.Run("fetch failure", func(t *testing.T) {
+		beforeFail := observeCount(t, failChild)
+		provAbort := New(&mockVerifier{}, &mockKeyChainProvider{}, &timeoutBundleFetcher{})
+		provAbort.Validate(context.Background(), &externaldata.ProviderRequest{
+			APIVersion: apiVersion,
+			Kind:       "ProviderRequest",
+			Request:    externaldata.Request{Keys: []string{validImageName}},
+		})
+		assert.Equal(t, uint64(1), observeCount(t, failChild)-beforeFail,
+			"an aborted request should observe the failure child once")
+	})
 }
 
 // TestValidateCountsKeychainErrorRequest verifies the request timer still counts
@@ -441,6 +726,34 @@ func TestValidateCountsKeychainErrorRequest(t *testing.T) {
 
 	assert.Equal(t, uint64(1), observeCount(t, child)-before,
 		"the keychain-error request should be observed once as a failure")
+}
+
+// TestValidateSkipsVerdictCountersWhenVerificationErrors pins the ordering of
+// the verification counters against the error check. When Verify returns an
+// error it returns no results, so recording verdicts first would compute
+// fail = len(bundles) - 0 and attribute a failed verification to every bundle
+// in the request - reporting a fault that stopped verification from running as
+// attestations that were checked and rejected. That is the same mistake this
+// provider avoids on the fetch path, one layer down.
+func TestValidateSkipsVerdictCountersWhenVerificationErrors(t *testing.T) {
+	beforeOK := testutil.ToFloat64(metrics.AttestationsVerOk)
+	beforeFail := testutil.ToFloat64(metrics.AttestationsVerFail)
+
+	// mockBundleFetcher returns one bundle for validImageName, so a
+	// count-before-check would record exactly one bogus failure.
+	provider := New(&errVerifier{}, &mockKeyChainProvider{}, &mockBundleFetcher{})
+	resp := provider.Validate(context.Background(), &externaldata.ProviderRequest{
+		APIVersion: apiVersion,
+		Kind:       "ProviderRequest",
+		Request:    externaldata.Request{Keys: []string{validImageName}},
+	})
+	require.NotEmpty(t, resp.Response.SystemError,
+		"a verification error should be a system error")
+
+	assert.InDelta(t, 0.0, testutil.ToFloat64(metrics.AttestationsVerFail)-beforeFail, 0.0001,
+		"a verification that could not run must not count any bundle as failed")
+	assert.InDelta(t, 0.0, testutil.ToFloat64(metrics.AttestationsVerOk)-beforeOK, 0.0001,
+		"nor as verified")
 }
 
 // TestValidateLogsImageContext verifies that per-image log lines carry the
@@ -489,9 +802,11 @@ func TestValidateLogsImageContext(t *testing.T) {
 	assert.NotEmpty(t, entry["request_id"])
 
 	assert.InDelta(t, 2.0, fetchErr["image_count"], 0.0001, "failure line should report the request image count")
-	// fetchErr is the last "error fetching bundles" line, i.e. the second
-	// image, so its 1-based image_index must be 2.
-	assert.InDelta(t, 2.0, fetchErr["image_index"], 0.0001, "failure line should report the 1-based image position")
+	// The first image's fetch fails, which aborts the request before the
+	// second image is ever fetched, so there is exactly one failure line and
+	// its 1-based image_index must be 1. image_count stays 2: the request
+	// really did carry two keys.
+	assert.InDelta(t, 1.0, fetchErr["image_index"], 0.0001, "failure line should report the 1-based image position")
 	assert.InDelta(t, 1.0, fetchErr["attempts"], 0.0001, "failure line should report the fetch attempt count")
 	assert.Equal(t, entry["request_id"], fetchErr["request_id"],
 		"per-image failure line should carry the request's correlation id")

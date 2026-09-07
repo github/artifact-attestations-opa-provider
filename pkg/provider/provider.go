@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http/httptrace"
@@ -77,22 +78,22 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 	var rstart = time.Now()
 	var err error
 
-	// Record the number of images (keys) in this request. Gatekeeper sends
-	// every image in a pod as a single request, so this captures the pod's
-	// image count. request_id/image_count/image_index are threaded through the
-	// per-image logs below so a single failure line (e.g. a fetch timeout) can
-	// be traced back to whether it was a solo or a large multi-image request.
+	// Record the number of images (keys) in this request.
+	// request_id/image_count/image_index are threaded
+	// through the per-image logs below so a single failure line (e.g. a fetch
+	// timeout) can be traced back to whether it was a solo or a large
+	// multi-image request.
 	var imageCount = len(r.Request.Keys)
 
-	// allOK tracks whether every image in the request verified cleanly. Any
-	// branch below that records an image error (or fails the whole request)
-	// clears it, so the request timer can be split into totally-successful vs
-	// not. It is declared before the deferred observe so the closure captures
-	// it, and read only at return.
-	allOK := true
+	// systemErr marks a request the provider could not complete: a bundle
+	// fetch failed. It drives the request timer's outcome, which reports
+	// whether the provider processed the request - NOT whether the images
+	// turned out to be properly attested. Declared before the deferred observe
+	// so the closure captures it, and read only at return.
+	systemErr := false
 	defer func() {
 		outcome := "success"
-		if !allOK {
+		if systemErr {
 			outcome = "failure"
 		}
 		metrics.AttestationsReqTimer.
@@ -110,7 +111,7 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 	// If the keychain configured is empty, the default keychain is used
 	// which works for public registries.
 	if kc, err = p.kc.KeyChain(ctx); err != nil {
-		allOK = false
+		systemErr = true
 		reqLog.Error("validate: error retrieving key chain",
 			"error", err)
 		return ErrorResponse(fmt.Sprintf("ERROR: KeyChain: %s", err))
@@ -128,7 +129,6 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 
 		imgLog.Info("validate: verify signature")
 		if ref, err = name.ParseReference(key); err != nil {
-			allOK = false
 			imgLog.Error("validate: error parsing reference",
 				"error", err)
 			results = append(results, externaldata.Item{
@@ -168,7 +168,6 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 			Observe(dur.Seconds())
 
 		if err != nil {
-			allOK = false
 			status := strconv.Itoa(fetcher.FailureStatus(err))
 			metrics.AttestationsRetrieveFail.WithLabelValues(reason, step, status).Inc()
 			// The connection-phase fields ride on the existing failure line, so
@@ -185,11 +184,45 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				fields = append(fields, tc.Fields()...)
 			}
 			imgLog.Error("validate: error fetching bundles", fields...)
-			results = append(results, externaldata.Item{
-				Key:   key,
-				Error: "error_fetching_bundle_" + reason,
-			})
-			continue
+
+			// A bundle whose layer we read to completion and whose digest was
+			// verified, but which then failed a purely local JSON decode, is a
+			// deterministic snapshot of the artifact. Report it per-image so
+			// the caller caches the denial.
+			var fe *fetcher.FetchError
+			if errors.As(err, &fe) && fe.Kind == fetcher.KindBundleInvalid {
+				results = append(results, externaldata.Item{
+					Key:   key,
+					Error: "error_fetching_bundle_" + reason,
+				})
+				continue
+			}
+
+			// Every other fetch failure says nothing durable about the image,
+			// so it must not be reported as a per-image result. Abort the
+			// whole request instead.
+			//
+			// This includes 404s. A reference can be mutable and registries may
+			// resolve it eventually, so a 404 does not establish that the
+			// artifact is absent.
+			systemErr = true
+			reqLog.Error("validate: aborting request",
+				"reason", reason,
+				"step", step,
+				"image_index", i+1,
+				"images_processed", len(results),
+				"images_skipped", imageCount-(i+1))
+			// Stop here rather than fetching the remaining images: they share
+			// one request budget, so they would most likely fail the same way
+			// and delay the response.
+			//
+			// Items completed earlier in this request are still returned. The
+			// caller caches per-image results, so returning them means a retry
+			// re-fetches only what is genuinely missing.
+			resp.Response.Items = results
+			resp.Response.SystemError = fmt.Sprintf(
+				"ERROR: BundleFromName(%q): reason=%s step=%s", key, reason, step)
+			return &resp
 		}
 
 		metrics.AttestationsRetrieved.Add(float64(len(result.Bundles)))
@@ -208,7 +241,6 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		imgLog.Info("validate: fetched OCI bundles", fetchedFields...)
 
 		if len(result.Bundles) == 0 {
-			allOK = false
 			metrics.AttestationsMissing.Inc()
 			imgLog.Info("validate: no bundles")
 			results = append(results, externaldata.Item{
@@ -222,18 +254,23 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 		res, err = p.v.Verify(result.Bundles, result.Hash)
 		dur = time.Since(start)
 		metrics.AttestationsVerTimer.Observe(dur.Seconds())
-		metrics.AttestationsVerOk.Add(float64(len(res)))
-		var fail = len(result.Bundles) - len(res)
-		if fail > 0 {
-			metrics.AttestationsVerFail.Add(float64(fail))
-		}
 
 		if err != nil {
-			allOK = false
+			systemErr = true
 			imgLog.Error("validate: verification error",
 				"image_digest", result.Hash.Hex,
 				"error", err)
 			return ErrorResponse(fmt.Sprintf("ERROR: VerifyImageSignatures(%q): %v", key, err))
+		}
+
+		// Counted only once the error is ruled out. An erroring Verify returns
+		// no results, so counting first would derive fail from an empty res and
+		// report every bundle as having failed verification when in fact none
+		// was verified at all.
+		metrics.AttestationsVerOk.Add(float64(len(res)))
+		var fail = len(result.Bundles) - len(res)
+		if fail > 0 {
+			metrics.AttestationsVerFail.Add(float64(fail))
 		}
 
 		var bundleVerified = len(res) > 0
@@ -245,7 +282,6 @@ func (p *Provider) Validate(ctx context.Context, r *externaldata.ProviderRequest
 				Value: res,
 			})
 		} else {
-			allOK = false
 			imgLog.Info("validate: no valid signatures")
 			results = append(results, externaldata.Item{
 				Key:   key,
