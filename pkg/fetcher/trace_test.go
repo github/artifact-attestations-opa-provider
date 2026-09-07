@@ -76,6 +76,50 @@ func TestTraceCollectorReusedConnectionNeverReturnsFirstByte(t *testing.T) {
 	assert.Equal(t, int64(-1), asInt64(t, f["tls_ms"]))
 }
 
+// TestTraceCollectorLastConnIdleMsUnobserved verifies that last_conn_idle_ms
+// reports the notRecorded sentinel, not 0, whenever an idle time was never
+// observed: a fresh collector that instrumented no request at all, and a
+// fresh (non-reused) dial, which never assigns an idle time because that
+// assignment only happens on the httptrace.GotConnInfo.Reused branch.
+func TestTraceCollectorLastConnIdleMsUnobserved(t *testing.T) {
+	t.Run("fresh collector, no requests", func(t *testing.T) {
+		c := NewTraceCollector()
+
+		f := fieldMap(t, c.Fields())
+		assert.Equal(t, int64(-1), asInt64(t, f["last_conn_idle_ms"]))
+	})
+
+	t.Run("fresh dial", func(t *testing.T) {
+		c := NewTraceCollector()
+		tr := c.Trace()
+
+		tr.GetConn("registry.example:443")
+		tr.GotConn(httptrace.GotConnInfo{Reused: false})
+
+		f := fieldMap(t, c.Fields())
+		assert.Equal(t, false, f["last_conn_reused"])
+		assert.Equal(t, int64(-1), asInt64(t, f["last_conn_idle_ms"]))
+	})
+}
+
+// TestTraceCollectorLastConnIdleMsGenuineZero verifies that a reused
+// connection with a sub-millisecond idle time reports a genuine 0, which must
+// stay distinct from the -1 sentinel reported when no idle time was observed
+// at all (TestTraceCollectorLastConnIdleMsUnobserved). This is the regression
+// case for the fix: routing last_conn_idle_ms through the same ms() sentinel
+// helper as the other phase timings must not turn this genuine 0 into -1.
+func TestTraceCollectorLastConnIdleMsGenuineZero(t *testing.T) {
+	c := NewTraceCollector()
+	tr := c.Trace()
+
+	tr.GetConn("registry.example:443")
+	tr.GotConn(httptrace.GotConnInfo{Reused: true, IdleTime: 0})
+
+	f := fieldMap(t, c.Fields())
+	assert.Equal(t, true, f["last_conn_reused"])
+	assert.Equal(t, int64(0), asInt64(t, f["last_conn_idle_ms"]))
+}
+
 // TestTraceCollectorClearsPriorConnectionOnNewRequest verifies that a request
 // which fails during establishment (GetConn but no GotConn) does not inherit
 // the previous request's reuse state, so the failure line cannot claim a
@@ -96,7 +140,8 @@ func TestTraceCollectorClearsPriorConnectionOnNewRequest(t *testing.T) {
 	f := fieldMap(t, c.Fields())
 	assert.Equal(t, false, f["last_conn_reused"],
 		"stale reuse state from the prior request must be cleared at GetConn")
-	assert.Equal(t, int64(0), asInt64(t, f["last_conn_idle_ms"]))
+	assert.Equal(t, int64(-1), asInt64(t, f["last_conn_idle_ms"]),
+		"stale idle time from the prior request must be cleared at GetConn, not reported as a genuine 0")
 	assert.Equal(t, int64(-1), asInt64(t, f["ttfb_ms"]),
 		"a request that never received a byte must not inherit the prior ttfb")
 	// The fetch-level reuse count still reflects the first, completed request.
@@ -177,6 +222,7 @@ func TestTraceCollectorInstrumentsRealRequest(t *testing.T) {
 	assert.Equal(t, 1, asInt(t, f["conns_new"]))
 	assert.Equal(t, 0, asInt(t, f["conns_reused"]))
 	assert.Equal(t, false, f["last_conn_reused"])
+	assert.Equal(t, int64(-1), asInt64(t, f["last_conn_idle_ms"]))
 	// connect_ms and tls_ms are sub-millisecond on loopback, so only their
 	// presence and non-negativity are asserted here; the synthetic fresh-dial
 	// test above exercises their timing exactly.
@@ -217,4 +263,5 @@ func TestTraceCollectorReportsBlackHoleOnRealRequest(t *testing.T) {
 	f := fieldMap(t, c.Fields())
 	assert.Equal(t, true, f["wrote_request"])
 	assert.Equal(t, int64(-1), asInt64(t, f["ttfb_ms"]))
+	assert.Equal(t, int64(-1), asInt64(t, f["last_conn_idle_ms"]))
 }
