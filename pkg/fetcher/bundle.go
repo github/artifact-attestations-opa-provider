@@ -41,6 +41,14 @@ var (
 	// previous retry behavior.
 	RetryThrottled = false
 
+	// MaxBundleSize caps the number of bytes read from a single referrer layer
+	// when decoding a bundle. The layer is registry-controlled and its length is
+	// not known to be trustworthy before it is read, so the read is bounded to
+	// keep a malformed or hostile artifact from driving an unbounded allocation
+	// on the admission path. Sigstore bundles are orders of magnitude smaller
+	// than the 10MiB default.
+	MaxBundleSize int64 = 10 << 20
+
 	// DialTimeoutOverride optionally pins the registry TCP dial timeout. Zero
 	// (the default) derives it from Timeout via resolveTransportTimeouts; a
 	// positive value is used verbatim.
@@ -460,14 +468,26 @@ func DoBundleFromName(ctx context.Context, ref name.Reference, ro []remote.Optio
 		if err != nil {
 			return nil, nil, newBlobError(err)
 		}
+		// A referrer tagged as a sigstore bundle is expected to carry the bundle
+		// as its first layer. An empty layer list is a property of the artifact
+		// rather than a transport fault, so report it as an invalid bundle
+		// instead of indexing into an empty slice.
+		if len(layers) == 0 {
+			return nil, nil, newEmptyLayersError()
+		}
 		layer0, err := layers[0].Uncompressed()
 		if err != nil {
 			return nil, nil, newBlobError(err)
 		}
-		bundleBytes, err := io.ReadAll(layer0)
+		// Read one byte past the cap so an oversized layer is detected without
+		// buffering the remainder of it.
+		bundleBytes, err := io.ReadAll(io.LimitReader(layer0, MaxBundleSize+1))
 		layer0.Close()
 		if err != nil {
 			return nil, nil, newBlobError(err)
+		}
+		if int64(len(bundleBytes)) > MaxBundleSize {
+			return nil, nil, newBundleTooLargeError(MaxBundleSize)
 		}
 		b := &bundle.Bundle{}
 		err = b.UnmarshalJSON(bundleBytes)
@@ -529,6 +549,32 @@ func newReferrersError(err error) *FetchError {
 // newBlobError builds a FetchError for a failed referrer image / blob fetch.
 func newBlobError(err error) *FetchError {
 	return newFetchError(StepBlob, KindBlobError, err)
+}
+
+// newEmptyLayersError builds a FetchError for a referrer that advertises a
+// sigstore bundle artifact type but carries no layers. It is classified as
+// KindBundleInvalid, not KindBlobError: the referrer manifest was fetched
+// successfully and its contents are a deterministic property of the artifact,
+// so retrying cannot change the outcome and the caller may cache the denial.
+func newEmptyLayersError() *FetchError {
+	return &FetchError{
+		Step:        StepBlob,
+		Kind:        KindBundleInvalid,
+		Recoverable: false,
+		Err:         errors.New("referrer image has no layers"),
+	}
+}
+
+// newBundleTooLargeError builds a FetchError for a bundle layer that exceeds
+// MaxBundleSize. Like newEmptyLayersError it is a deterministic property of the
+// artifact under the configured limit, so it is non-recoverable.
+func newBundleTooLargeError(limit int64) *FetchError {
+	return &FetchError{
+		Step:        StepBlob,
+		Kind:        KindBundleInvalid,
+		Recoverable: false,
+		Err:         fmt.Errorf("bundle exceeds maximum size of %d bytes", limit),
+	}
 }
 
 // classifyTransport maps an error to a stable FailureKind and, when the error

@@ -48,6 +48,7 @@ var (
 	bundleTimeout        = flag.Duration("bundle-timeout", 3*time.Second, "timeout for a single attempt to fetch a bundle")
 	bundleDelay          = flag.Duration("bundle-delay", 0, "delay between attempts to fetch a bundle")
 	bundleRetryThrottled = flag.Bool("bundle-retry-throttled", false, "retry registry throttling (HTTP 429) in-line instead of failing fast")
+	bundleMaxSize        = flag.Int64("bundle-max-size", 10<<20, "max bytes read from a referrer layer when decoding a bundle")
 
 	registryDialTimeout           = flag.Duration("registry-dial-timeout", 0, "override TCP dial timeout to the registry; 0 derives it from bundle-timeout")
 	registryTLSHandshakeTimeout   = flag.Duration("registry-tls-handshake-timeout", 0, "override TLS handshake timeout to the registry; 0 derives it from bundle-timeout")
@@ -90,6 +91,9 @@ func main() {
 	}
 	if err := configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay,
 		*registryDialTimeout, *registryTLSHandshakeTimeout, *registryResponseHeaderTimeout); err != nil {
+		log.Fatal(err)
+	}
+	if err := configureBundleLimits(*bundleMaxSize); err != nil {
 		log.Fatal(err)
 	}
 	fetcher.RetryThrottled = *bundleRetryThrottled
@@ -258,6 +262,19 @@ func configureBundleFetcher(maxAttempts int, timeout, delay time.Duration,
 	// Rebuild the shared registry transport now that Timeout and the overrides
 	// are set, so its connection-phase timeouts track the per-attempt budget.
 	fetcher.ConfigureTransport()
+	return nil
+}
+
+// configureBundleLimits validates the bundle size cap and applies it to the
+// fetcher package var. The cap must be positive: a zero or negative limit would
+// reject every bundle rather than disable the check.
+func configureBundleLimits(maxSize int64) error {
+	if maxSize <= 0 {
+		return errors.New("bundle-max-size must be greater than zero")
+	}
+
+	fetcher.MaxBundleSize = maxSize
+
 	return nil
 }
 
