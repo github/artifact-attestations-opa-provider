@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1019,6 +1020,36 @@ func TestDoBundleFromNameAcceptsBundleAtSizeLimit(t *testing.T) {
 	t.Cleanup(func() { MaxBundleSize = 10 << 20 })
 	// Exactly at the cap: the boundary must not be rejected.
 	MaxBundleSize = int64(len(blob))
+
+	ref, ro := serveBundleReferrer(t, []v1.Descriptor{bundleLayerDescriptor(t, blob)}, blob)
+
+	bundles, hash, err := DoBundleFromName(t.Context(), ref, ro)
+	require.NoError(t, err)
+	require.Len(t, bundles, 1)
+	assert.NotNil(t, hash)
+}
+
+func TestBundleReadLimit(t *testing.T) {
+	t.Cleanup(func() { MaxBundleSize = 10 << 20 })
+
+	MaxBundleSize = 4096
+	assert.Equal(t, int64(4097), bundleReadLimit(),
+		"the probe reads one byte past the cap")
+
+	// Adding one here would wrap to a negative limit, which io.LimitReader
+	// treats as immediate EOF.
+	MaxBundleSize = math.MaxInt64
+	assert.Equal(t, int64(math.MaxInt64), bundleReadLimit())
+	assert.Positive(t, bundleReadLimit(), "the read limit must never wrap negative")
+}
+
+func TestDoBundleFromNameAcceptsMaxInt64Limit(t *testing.T) {
+	blob, err := os.ReadFile("testdata/valid-bundle.json")
+	require.NoError(t, err)
+
+	t.Cleanup(func() { MaxBundleSize = 10 << 20 })
+	// An effectively unlimited cap must still read the layer, not truncate it.
+	MaxBundleSize = math.MaxInt64
 
 	ref, ro := serveBundleReferrer(t, []v1.Descriptor{bundleLayerDescriptor(t, blob)}, blob)
 

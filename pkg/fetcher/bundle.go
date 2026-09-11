@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"runtime"
@@ -481,7 +482,7 @@ func DoBundleFromName(ctx context.Context, ref name.Reference, ro []remote.Optio
 		}
 		// Read one byte past the cap so an oversized layer is detected without
 		// buffering the remainder of it.
-		bundleBytes, err := io.ReadAll(io.LimitReader(layer0, MaxBundleSize+1))
+		bundleBytes, err := io.ReadAll(io.LimitReader(layer0, bundleReadLimit()))
 		layer0.Close()
 		if err != nil {
 			return nil, nil, newBlobError(err)
@@ -549,6 +550,20 @@ func newReferrersError(err error) *FetchError {
 // newBlobError builds a FetchError for a failed referrer image / blob fetch.
 func newBlobError(err error) *FetchError {
 	return newFetchError(StepBlob, KindBlobError, err)
+}
+
+// bundleReadLimit returns the number of bytes to read from a bundle layer: one
+// past MaxBundleSize, so an oversized layer is detected without buffering the
+// remainder of it. At math.MaxInt64 there is no byte to spare and adding one
+// would wrap to a negative limit, which io.LimitReader treats as immediate EOF
+// and would make every bundle decode as empty. Use the value as-is there; the
+// cap is then unreachable, which is what configuring it that high asks for.
+func bundleReadLimit() int64 {
+	if MaxBundleSize == math.MaxInt64 {
+		return math.MaxInt64
+	}
+
+	return MaxBundleSize + 1
 }
 
 // newEmptyLayersError builds a FetchError for a referrer that advertises a
