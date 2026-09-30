@@ -1,11 +1,15 @@
 package cainjector
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"os"
 	"path"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/open-policy-agent/frameworks/constraint/pkg/apis/externaldata/v1beta1"
 	"github.com/stretchr/testify/require"
@@ -23,6 +27,15 @@ func loadTestCert(t *testing.T, name string) []byte {
 		t.Fatalf("failed to read test certificate %s: %v", certPath, err)
 	}
 	return data
+}
+
+func disablePropagationDelay(t *testing.T) {
+	t.Helper()
+	original := propagationDelay
+	propagationDelay = 0
+	t.Cleanup(func() {
+		propagationDelay = original
+	})
 }
 
 func TestUpdateCABundle(t *testing.T) {
@@ -89,7 +102,7 @@ func TestUpdateCABundle(t *testing.T) {
 	}
 	err := v1beta1.AddToScheme(scheme.Scheme)
 	require.NoError(t, err)
-	propagationDelay = 0 // speed up tests
+	disablePropagationDelay(t)
 
 	for _, test := range cases {
 		t.Run(test.Name, func(t *testing.T) {
@@ -124,6 +137,72 @@ func TestUpdateCABundle(t *testing.T) {
 				require.Equal(t, test.Expected, provider.Spec.CABundle)
 			}
 		})
+	}
+}
+
+func TestStartUpdatesImmediately(t *testing.T) {
+	disablePropagationDelay(t)
+
+	valid := loadTestCert(t, "valid1")
+	err := v1beta1.AddToScheme(scheme.Scheme)
+	require.NoError(t, err)
+	client := fake.NewSimpleDynamicClient(scheme.Scheme, &v1beta1.Provider{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "artifact-attestations-opa-provider",
+		},
+	})
+
+	caPath := path.Join(t.TempDir(), "ca.crt")
+	require.NoError(t, os.WriteFile(caPath, valid, 0600))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	require.NoError(t, Start(ctx, client, caPath, time.Hour))
+
+	rawProvider, err := client.Resource(schema.GroupVersionResource{
+		Group:    "externaldata.gatekeeper.sh",
+		Version:  "v1beta1",
+		Resource: "providers",
+	}).Get(t.Context(), "artifact-attestations-opa-provider", v1.GetOptions{})
+	require.NoError(t, err)
+
+	var provider v1beta1.Provider
+	require.NoError(t,
+		runtime.DefaultUnstructuredConverter.FromUnstructured(rawProvider.UnstructuredContent(), &provider))
+	require.Equal(t, encode(valid), provider.Spec.CABundle)
+}
+
+func TestStartRejectsNonPositiveInterval(t *testing.T) {
+	err := Start(t.Context(), nil, "", 0)
+	require.EqualError(t, err, "CA bundle refresh interval must be greater than zero")
+}
+
+func TestRefreshLoopRetriesAfterFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	tick := make(chan time.Time)
+	var calls atomic.Int64
+	update := func(context.Context) error {
+		if calls.Add(1) == 1 {
+			return errors.New("transient failure")
+		}
+		return nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		refreshLoop(ctx, tick, update)
+	}()
+
+	tick <- time.Time{}
+	tick <- time.Time{}
+	require.Equal(t, int64(2), calls.Load())
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("refresh loop did not stop after context cancellation")
 	}
 }
 
