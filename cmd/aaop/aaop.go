@@ -85,12 +85,14 @@ func main() {
 	var err error
 
 	flag.Parse()
-	if err := configureRegistryPool(*registryDialKeepAlive, *registryIdleConnTimeout,
-		*registryMaxIdleConns, *registryMaxIdleConnsPerHost); err != nil {
+	err = configureRegistryPool(*registryDialKeepAlive, *registryIdleConnTimeout,
+		*registryMaxIdleConns, *registryMaxIdleConnsPerHost)
+	if err != nil {
 		log.Fatal(err)
 	}
-	if err := configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay,
-		*registryDialTimeout, *registryTLSHandshakeTimeout, *registryResponseHeaderTimeout); err != nil {
+	err = configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay,
+		*registryDialTimeout, *registryTLSHandshakeTimeout, *registryResponseHeaderTimeout)
+	if err != nil {
 		log.Fatal(err)
 	}
 	fetcher.RetryThrottled = *bundleRetryThrottled

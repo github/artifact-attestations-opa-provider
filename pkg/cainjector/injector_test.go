@@ -180,9 +180,12 @@ func TestStartRejectsNonPositiveInterval(t *testing.T) {
 func TestRefreshLoopRetriesAfterFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	tick := make(chan time.Time)
+	updated := make(chan struct{})
 	var calls atomic.Int64
 	update := func(context.Context) error {
-		if calls.Add(1) == 1 {
+		call := calls.Add(1)
+		updated <- struct{}{}
+		if call == 1 {
 			return errors.New("transient failure")
 		}
 		return nil
@@ -195,7 +198,9 @@ func TestRefreshLoopRetriesAfterFailure(t *testing.T) {
 	}()
 
 	tick <- time.Time{}
+	<-updated
 	tick <- time.Time{}
+	<-updated
 	require.Equal(t, int64(2), calls.Load())
 
 	cancel()
