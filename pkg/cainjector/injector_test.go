@@ -4,11 +4,16 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/open-policy-agent/frameworks/constraint/pkg/apis/externaldata/v1beta1"
@@ -16,8 +21,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 )
 
 func loadTestCert(t *testing.T, name string) []byte {
@@ -72,6 +79,12 @@ func TestUpdateCABundle(t *testing.T) {
 		{
 			Name:             "Adds new certificates",
 			b64Bundle:        encode(valid1),
+			additionalBundle: valid2,
+			Expected:         encode(append(valid1, valid2...)),
+		},
+		{
+			Name:             "Retains unexpired certificates removed from mounted bundle",
+			b64Bundle:        encode(append(valid1, valid2...)),
 			additionalBundle: valid2,
 			Expected:         encode(append(valid1, valid2...)),
 		},
@@ -177,6 +190,121 @@ func TestStartRejectsNonPositiveInterval(t *testing.T) {
 	require.EqualError(t, err, "CA bundle refresh interval must be greater than zero")
 }
 
+func TestStartTimesOutStalledRequests(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		t.Run(method, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				caPath := filepath.Join(t.TempDir(), "ca.crt")
+				require.NoError(t, os.WriteFile(caPath, loadTestCert(t, "valid1"), 0600))
+
+				client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
+					if req.Method != method {
+						time.Sleep(5 * time.Second)
+						return providerResponse(""), nil
+					}
+					if _, ok := req.Context().Deadline(); !ok {
+						return nil, errors.New("request has no deadline")
+					}
+					<-req.Context().Done()
+					return nil, req.Context().Err()
+				})
+
+				started := time.Now()
+				err := Start(t.Context(), client, caPath, time.Hour)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.Equal(t, 30*time.Second, time.Since(started))
+				require.NoError(t, t.Context().Err())
+			})
+		})
+	}
+}
+
+func TestStartRetriesAfterTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		valid := loadTestCert(t, "valid1")
+		caPath := filepath.Join(t.TempDir(), "ca.crt")
+		require.NoError(t, os.WriteFile(caPath, valid, 0600))
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		requests := make(chan context.Context, 3)
+		var calls int
+		client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
+			calls++
+			requests <- req.Context()
+			if calls == 2 {
+				if _, ok := req.Context().Deadline(); !ok {
+					return nil, errors.New("request has no deadline")
+				}
+				<-req.Context().Done()
+				return nil, req.Context().Err()
+			}
+			return providerResponse(encode(valid)), nil
+		})
+
+		require.NoError(t, Start(ctx, client, caPath, time.Hour))
+		require.Len(t, requests, 1)
+		initialRequest := <-requests
+
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		require.Len(t, requests, 1)
+		timedOutRequest := <-requests
+		_, bounded := timedOutRequest.Deadline()
+		require.True(t, bounded, "periodic refresh must have its own deadline")
+		require.NoError(t, timedOutRequest.Err())
+
+		time.Sleep(30 * time.Second)
+		synctest.Wait()
+		require.ErrorIs(t, timedOutRequest.Err(), context.DeadlineExceeded)
+		require.NoError(t, ctx.Err())
+
+		time.Sleep(time.Hour - 30*time.Second)
+		synctest.Wait()
+		require.Len(t, requests, 1, "the next interval must retry after the timeout")
+		retriedRequest := <-requests
+		require.NoError(t, ctx.Err())
+		require.ErrorIs(t, initialRequest.Err(), context.Canceled)
+		require.ErrorIs(t, retriedRequest.Err(), context.Canceled)
+	})
+}
+
+func TestStartHonorsParentCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		time.AfterFunc(time.Second, cancel)
+
+		client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
+			<-req.Context().Done()
+			return nil, req.Context().Err()
+		})
+
+		started := time.Now()
+		err := Start(ctx, client, "", time.Hour)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, time.Second, time.Since(started))
+	})
+}
+
+func TestStartHonorsParentDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+
+		client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
+			<-req.Context().Done()
+			return nil, req.Context().Err()
+		})
+
+		started := time.Now()
+		err := Start(ctx, client, "", time.Hour)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Equal(t, time.Second, time.Since(started))
+	})
+}
+
 func TestRefreshLoopRetriesAfterFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	tick := make(chan time.Time)
@@ -208,6 +336,34 @@ func TestRefreshLoopRetriesAfterFailure(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("refresh loop did not stop after context cancellation")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func newTestClient(t *testing.T, roundTrip roundTripFunc) *dynamic.DynamicClient {
+	t.Helper()
+	client, err := dynamic.NewForConfig(&rest.Config{
+		Host:      "https://kubernetes.example",
+		Transport: roundTrip,
+	})
+	require.NoError(t, err)
+	return client
+}
+
+func providerResponse(bundle string) *http.Response {
+	body := fmt.Sprintf(
+		`{"apiVersion":"externaldata.gatekeeper.sh/v1beta1","kind":"Provider","metadata":{"name":"artifact-attestations-opa-provider"},"spec":{"caBundle":%q}}`,
+		bundle,
+	)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 }
 
