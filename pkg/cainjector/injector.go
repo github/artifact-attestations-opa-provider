@@ -22,6 +22,44 @@ import (
 
 var propagationDelay = 10 * time.Second
 
+// Start updates the Provider's CA bundle synchronously, then refreshes it on
+// refreshInterval until ctx is done.
+func Start(ctx context.Context, k8sClient dynamic.Interface, bundlePath string, refreshInterval time.Duration) error {
+	if refreshInterval <= 0 {
+		return errors.New("CA bundle refresh interval must be greater than zero")
+	}
+
+	if err := UpdateCABundle(ctx, k8sClient, bundlePath); err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(refreshInterval)
+	go func() {
+		defer ticker.Stop()
+		refreshLoop(ctx, ticker.C, func(ctx context.Context) error {
+			return UpdateCABundle(ctx, k8sClient, bundlePath)
+		})
+	}()
+
+	return nil
+}
+
+func refreshLoop(ctx context.Context, tick <-chan time.Time, update func(context.Context) error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick:
+			if err := update(ctx); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				slog.Error("failed to refresh CA bundle", "error", err)
+			}
+		}
+	}
+}
+
 // UpdateCABundle ensures that the `caBundle` field in the Provider object contains the CA certificates in $certsDir/ca.crt.
 // If the field is already up to date, no changes are made.
 // If an update is made, it sleeps for 10 seconds to allow Gatekeeper to pick up the changes.
@@ -54,7 +92,13 @@ func UpdateCABundle(ctx context.Context, k8sClient dynamic.Interface, bundlePath
 	slog.Info("Successfully updated CA bundle in Provider object.")
 	slog.Info("Sleeping to allow Gatekeeper to pick up the changes",
 		"sleep_time", propagationDelay)
-	time.Sleep(propagationDelay)
+	timer := time.NewTimer(propagationDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("waiting for Gatekeeper to pick up CA bundle changes: %w", ctx.Err())
+	case <-timer.C:
+	}
 	slog.Info("Update CA bundle done")
 
 	return nil
@@ -97,10 +141,11 @@ func mergeAndEncode(encodedBundle string, additional []byte) (string, error) {
 		if _, exists := uniqueCerts[key]; !exists {
 			uniqueCerts[key] = true
 
-			if err = pem.Encode(buffer, &pem.Block{
+			err = pem.Encode(buffer, &pem.Block{
 				Type:  "CERTIFICATE",
 				Bytes: cert.Raw,
-			}); err != nil {
+			})
+			if err != nil {
 				return "", fmt.Errorf("failed to encode certificate to PEM: %w", err)
 			}
 		}

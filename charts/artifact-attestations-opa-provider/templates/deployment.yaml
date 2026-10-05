@@ -45,6 +45,7 @@ spec:
         - -port={{ .Values.port }}
         - -trust-domain={{ .Values.trustDomain }}
         - -update-ca-bundle={{ .Values.provider.tls.updateCABundle }}
+        - -ca-bundle-refresh-interval={{ .Values.provider.tls.caBundleRefreshInterval }}
         ports:
         - containerPort: {{ .Values.port }}
           protocol: TCP

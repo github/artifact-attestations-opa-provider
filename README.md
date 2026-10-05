@@ -90,6 +90,10 @@ Attestations OPA Provider POD.
 When installing the Artifacts Attestations OPA Provider, the CA
 certificate bundle must be provided to configure the root of trust.
 
+When `provider.tls.updateCABundle` is enabled, the provider reconciles
+the mounted `ca.crt` with the Gatekeeper Provider object at startup and
+every `provider.tls.caBundleRefreshInterval` (one hour by default).
+
 The secret containing the TLS certificate and private key can be
 automatically created, or created separately from the helm
 installation. The secret must have the name `provider-tls-cert`.
