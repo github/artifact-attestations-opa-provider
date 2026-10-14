@@ -97,10 +97,7 @@ func (k *KeyChainProvider) buildKeychain(ctx context.Context) (authn.Keychain, b
 	ok := true
 
 	// Add the kubernetes authenticator
-	if kc, err := kubernetes.NewInCluster(ctx, kubernetes.Options{
-		Namespace:        k.namespace,
-		ImagePullSecrets: k.imagePullSecrets,
-	}); err != nil {
+	if kc, err := kubernetes.NewInCluster(ctx, kubernetes.Options{Namespace: k.namespace, ImagePullSecrets: k.imagePullSecrets}); err != nil {
 		slog.Error("failed to add kubernetes key chain",
 			"error", err)
 		ok = false
@@ -109,9 +106,7 @@ func (k *KeyChainProvider) buildKeychain(ctx context.Context) (authn.Keychain, b
 	}
 
 	// Add a "cloud k8s" authenticator
-	if kc, err := k8schain.NewInCluster(ctx, k8schain.Options{
-		Namespace: k.namespace,
-	}); err != nil {
+	if kc, err := k8schain.NewInCluster(ctx, k8schain.Options{Namespace: k.namespace}); err != nil {
 		slog.Error("failed to add k8schain key chain",
 			"error", err)
 		ok = false

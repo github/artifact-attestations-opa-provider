@@ -97,10 +97,7 @@ func mergeAndEncode(encodedBundle string, additional []byte) (string, error) {
 		if _, exists := uniqueCerts[key]; !exists {
 			uniqueCerts[key] = true
 
-			if err = pem.Encode(buffer, &pem.Block{
-				Type:  "CERTIFICATE",
-				Bytes: cert.Raw,
-			}); err != nil {
+			if err := pem.Encode(buffer, &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}); err != nil {
 				return "", fmt.Errorf("failed to encode certificate to PEM: %w", err)
 			}
 		}
