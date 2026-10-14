@@ -6,51 +6,54 @@ CLUSTER = kind
 all: aaop
 
 .PHONY: build
-build: aaop
+build: aaop ## Build binary
 
 .PHONY: aaop
 aaop:
 	go build -o $@ cmd/aaop/$@.go
 
 .PHONY: tidy
-tidy:
+tidy: ## Run go mod tidy
 	go mod tidy
 
 .PHONY: lint
-lint:
+lint: ## Run golangci-lint
 	golangci-lint run
 
 .PHONY: test
-test:
+test: ## Run unit tests
 	go test ./... -race
 
 .PHONY: fmt
-fmt:
+fmt: ## Run go fmt
 	go fmt ./...
 
 .PHONY: docker
-docker:
+docker: ## Build image
 	docker build --platform linux/arm64 -t ${IMG} .
 
-.PHONY: docker-arm
-docker-arm:
-	docker build --platform linux/arm64 -t ${IMG_ARM} -f Dockerfile.arm .
-
 .PHONY: kind-load-image-arm
-kind-load-image:
+kind-load-image: ## Load image with Kind
 	kind load docker-image ${IMG} --name ${CLUSTER}
 
 .PHONY: test-rego
-test-rego:
+test-rego: ## Run rego tests
 	cd rego && opa test . -v
 
 .PHONY: integration-test
-integration-test:
+integration-test: ## Run integration tests
 	HOST=localhost ./scripts/gen_certs.sh
 	./scripts/integration_test.sh
 
-.PHONY: coverage
+.PHONY: coverage ## Go coverage
 coverage:
 	go test -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 	rm coverage.out
+
+.PHONY: help
+help: ## Show this help message
+	@echo 'Usage: make [target]'
+	@echo ''
+	@echo 'Available targets:'
+	@awk 'BEGIN {FS = ":.*##"; printf ""} /^[a-zA-Z_0-9.\/-]+:.*?##/ { printf "  %-30s %s\n", $$1, $$2 } /^##@/ { printf "\n%s\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
