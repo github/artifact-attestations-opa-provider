@@ -60,7 +60,8 @@ var (
 
 	registryTrace = flag.Bool("registry-trace", true, "emit HTTP connection-phase timings on fetch failures")
 
-	updateCABundle = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
+	updateCABundle          = flag.Bool("update-ca-bundle", false, "regularly update the Provider's caBundle field")
+	caBundleRefreshInterval = flag.Duration("ca-bundle-refresh-interval", time.Hour, "how often the Provider's caBundle field is refreshed")
 )
 
 const (
@@ -84,12 +85,14 @@ func main() {
 	var err error
 
 	flag.Parse()
-	if err := configureRegistryPool(*registryDialKeepAlive, *registryIdleConnTimeout,
-		*registryMaxIdleConns, *registryMaxIdleConnsPerHost); err != nil {
+	err = configureRegistryPool(*registryDialKeepAlive, *registryIdleConnTimeout,
+		*registryMaxIdleConns, *registryMaxIdleConnsPerHost)
+	if err != nil {
 		log.Fatal(err)
 	}
-	if err := configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay,
-		*registryDialTimeout, *registryTLSHandshakeTimeout, *registryResponseHeaderTimeout); err != nil {
+	err = configureBundleFetcher(*bundleMaxAttempts, *bundleTimeout, *bundleDelay,
+		*registryDialTimeout, *registryTLSHandshakeTimeout, *registryResponseHeaderTimeout)
+	if err != nil {
 		log.Fatal(err)
 	}
 	fetcher.RetryThrottled = *bundleRetryThrottled
@@ -158,19 +161,19 @@ func main() {
 		}
 	}()
 
+	// Handle signals gracefully to avoid dropping requests during Pod shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+
 	if *updateCABundle {
 		client, err := getK8sClient()
 		if err != nil {
 			log.Fatalf("failed to create Kubernetes client: %v", err)
 		}
 
-		if err := cainjector.UpdateCABundle(context.Background(), client, path.Join(*certsDir, "ca.crt")); err != nil {
-			log.Fatalf("failed to update CA bundle: %v", err)
+		if err := cainjector.Start(ctx, client, path.Join(*certsDir, "ca.crt"), *caBundleRefreshInterval); err != nil {
+			log.Fatalf("failed to start CA bundle updater: %v", err)
 		}
 	}
-
-	// Handle signals gracefully to avoid dropping requests during Pod shutdown
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
 	kc = authn.NewKeyChainProvider(*ns, []string{*ips}, *keychainRefresh)
 	// Build the keychain once and refresh it periodically in the background so
