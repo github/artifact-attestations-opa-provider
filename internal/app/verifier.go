@@ -31,7 +31,10 @@ func CreateVerifier(cfg *VerifierCfg) (*verifier.Multi, error) {
 	var err error
 
 	if cfg.TufRepo != "" && cfg.TufRoot != "" && len(cfg.TufTargets) > 0 {
-		if vv, err = LoadCustomVerifier(cfg.TufRepo, cfg.TufRoot, cfg.TufTargets); err != nil {
+		vv, err = LoadCustomVerifier(cfg.TufRepo,
+			cfg.TufRoot,
+			cfg.TufTargets)
+		if err != nil {
 			slog.Error("failed to load custom verifier", "error", err)
 			return nil, err
 		}

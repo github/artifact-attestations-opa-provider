@@ -18,9 +18,56 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+
+	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 )
 
+const caBundleUpdateTimeout = 30 * time.Second
+
 var propagationDelay = 10 * time.Second
+
+// Start updates the Provider's CA bundle synchronously, then refreshes it on
+// refreshInterval until ctx is done.
+func Start(ctx context.Context, k8sClient dynamic.Interface, bundlePath string, refreshInterval time.Duration) error {
+	if refreshInterval <= 0 {
+		return errors.New("CA bundle refresh interval must be greater than zero")
+	}
+
+	update := func(ctx context.Context) error {
+		updateCtx, cancel := context.WithTimeout(ctx, caBundleUpdateTimeout)
+		defer cancel()
+		return UpdateCABundle(updateCtx, k8sClient, bundlePath)
+	}
+
+	if err := update(ctx); err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(refreshInterval)
+	go func() {
+		defer ticker.Stop()
+		refreshLoop(ctx, ticker.C, update)
+	}()
+
+	return nil
+}
+
+func refreshLoop(ctx context.Context, tick <-chan time.Time, update func(context.Context) error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick:
+			if err := update(ctx); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				metrics.CABundleRefreshFail.Inc()
+				slog.Error("failed to refresh CA bundle", "error", err)
+			}
+		}
+	}
+}
 
 // UpdateCABundle ensures that the `caBundle` field in the Provider object contains the CA certificates in $certsDir/ca.crt.
 // If the field is already up to date, no changes are made.
@@ -54,7 +101,13 @@ func UpdateCABundle(ctx context.Context, k8sClient dynamic.Interface, bundlePath
 	slog.Info("Successfully updated CA bundle in Provider object.")
 	slog.Info("Sleeping to allow Gatekeeper to pick up the changes",
 		"sleep_time", propagationDelay)
-	time.Sleep(propagationDelay)
+	timer := time.NewTimer(propagationDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("waiting for Gatekeeper to pick up CA bundle changes: %w", ctx.Err())
+	case <-timer.C:
+	}
 	slog.Info("Update CA bundle done")
 
 	return nil
@@ -97,7 +150,11 @@ func mergeAndEncode(encodedBundle string, additional []byte) (string, error) {
 		if _, exists := uniqueCerts[key]; !exists {
 			uniqueCerts[key] = true
 
-			if err := pem.Encode(buffer, &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}); err != nil {
+			err = pem.Encode(buffer, &pem.Block{
+				Type:  "CERTIFICATE",
+				Bytes: cert.Raw,
+			})
+			if err != nil {
 				return "", fmt.Errorf("failed to encode certificate to PEM: %w", err)
 			}
 		}

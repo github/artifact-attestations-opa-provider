@@ -82,6 +82,12 @@ var (
 	})
 
 	//nolint: revive
+	CABundleRefreshFail = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "aaop_ca_bundle_refresh_fail",
+		Help: "The total number of background CA bundle refresh failures, including timeouts and excluding application shutdown",
+	})
+
+	//nolint: revive
 	ConfigInfo = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "aaop_config_info",
 		Help: "The effective fetch configuration; value is always 1",
