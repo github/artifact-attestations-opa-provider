@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -871,4 +872,189 @@ func TestDoBundleFromNameSharesAuthHandshake(t *testing.T) {
 		"auth ping should run once per fetch, not once per remote.* call")
 	assert.Equal(t, int64(1), tokenCount.Load(),
 		"token exchange should run once per fetch, not once per remote.* call")
+}
+
+// testBundleArtifactType is the sigstore bundle artifact type that
+// DoBundleFromName filters referrers on.
+const testBundleArtifactType = "application/vnd.dev.sigstore.bundle.v0.3+json"
+
+// serveBundleReferrer stands up a fake OCI registry serving a subject image
+// with a single referrer that advertises the sigstore bundle artifact type.
+// layers controls the referrer manifest's layer list so a test can serve a
+// malformed artifact; blob is returned for the layer blob GET.
+func serveBundleReferrer(t *testing.T, layers []v1.Descriptor, blob []byte) (name.Reference, []remote.Option) {
+	t.Helper()
+
+	emptyHash, _, err := v1.SHA256(bytes.NewReader([]byte("{}")))
+	require.NoError(t, err)
+
+	emptyConfig := v1.Descriptor{MediaType: types.OCIConfigJSON, Digest: emptyHash, Size: 2}
+
+	attBytes, err := json.Marshal(v1.Manifest{
+		SchemaVersion: 2,
+		MediaType:     types.OCIManifestSchema1,
+		ArtifactType:  testBundleArtifactType,
+		Config:        emptyConfig,
+		Layers:        layers,
+	})
+	require.NoError(t, err)
+
+	attHash, _, err := v1.SHA256(bytes.NewReader(attBytes))
+	require.NoError(t, err)
+
+	referrersBytes, err := json.Marshal(v1.IndexManifest{
+		SchemaVersion: 2,
+		MediaType:     types.OCIImageIndex,
+		Manifests: []v1.Descriptor{{
+			MediaType:    types.OCIManifestSchema1,
+			Digest:       attHash,
+			Size:         int64(len(attBytes)),
+			ArtifactType: testBundleArtifactType,
+		}},
+	})
+	require.NoError(t, err)
+
+	subjectBytes, err := json.Marshal(v1.Manifest{
+		SchemaVersion: 2,
+		MediaType:     types.OCIManifestSchema1,
+		Config:        emptyConfig,
+		Layers:        []v1.Descriptor{},
+	})
+	require.NoError(t, err)
+
+	subjectHash, _, err := v1.SHA256(bytes.NewReader(subjectBytes))
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v2/":
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/v2/test/app/manifests/latest":
+			w.Header().Set("Content-Type", string(types.OCIManifestSchema1))
+			w.Header().Set("Docker-Content-Digest", subjectHash.String())
+			_, _ = w.Write(subjectBytes)
+		case r.URL.Path == "/v2/test/app/manifests/"+attHash.String():
+			w.Header().Set("Content-Type", string(types.OCIManifestSchema1))
+			w.Header().Set("Docker-Content-Digest", attHash.String())
+			_, _ = w.Write(attBytes)
+		case strings.HasPrefix(r.URL.Path, "/v2/test/app/referrers/"):
+			w.Header().Set("Content-Type", string(types.OCIImageIndex))
+			_, _ = w.Write(referrersBytes)
+		case strings.HasPrefix(r.URL.Path, "/v2/test/app/blobs/"):
+			_, _ = w.Write(blob)
+		default:
+			t.Errorf("unexpected registry request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	ref, err := name.ParseReference(
+		strings.TrimPrefix(server.URL, "http://")+"/test/app:latest",
+		name.Insecure,
+	)
+	require.NoError(t, err)
+
+	return ref, []remote.Option{
+		remote.WithAuth(authn.Anonymous),
+		remote.WithTransport(http.DefaultTransport),
+	}
+}
+
+// bundleLayerDescriptor builds the descriptor for a bundle blob served as a
+// referrer's only layer.
+func bundleLayerDescriptor(t *testing.T, blob []byte) v1.Descriptor {
+	t.Helper()
+
+	hash, size, err := v1.SHA256(bytes.NewReader(blob))
+	require.NoError(t, err)
+
+	return v1.Descriptor{MediaType: testBundleArtifactType, Digest: hash, Size: size}
+}
+
+func TestDoBundleFromNameRejectsReferrerWithNoLayers(t *testing.T) {
+	// A referrer advertising the sigstore bundle artifact type but carrying no
+	// layers used to index into an empty slice.
+	ref, ro := serveBundleReferrer(t, []v1.Descriptor{}, nil)
+
+	bundles, hash, err := DoBundleFromName(t.Context(), ref, ro)
+	require.Error(t, err)
+	assert.Nil(t, bundles)
+	assert.Nil(t, hash)
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindBundleInvalid, fe.Kind)
+	assert.Equal(t, StepBlob, fe.Step)
+	assert.False(t, fe.Recoverable, "a malformed artifact cannot be fixed by retrying")
+	assert.Contains(t, fe.Error(), "no layers")
+}
+
+func TestDoBundleFromNameRejectsOversizedBundle(t *testing.T) {
+	blob, err := os.ReadFile("testdata/valid-bundle.json")
+	require.NoError(t, err)
+
+	t.Cleanup(func() { MaxBundleSize = 10 << 20 })
+	// One byte below the real bundle, so only the cap rejects it.
+	MaxBundleSize = int64(len(blob)) - 1
+
+	ref, ro := serveBundleReferrer(t, []v1.Descriptor{bundleLayerDescriptor(t, blob)}, blob)
+
+	bundles, hash, err := DoBundleFromName(t.Context(), ref, ro)
+	require.Error(t, err)
+	assert.Nil(t, bundles)
+	assert.Nil(t, hash)
+
+	var fe *FetchError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, KindBundleInvalid, fe.Kind)
+	assert.Equal(t, StepBlob, fe.Step)
+	assert.False(t, fe.Recoverable)
+	assert.Contains(t, fe.Error(), "exceeds maximum size")
+}
+
+func TestDoBundleFromNameAcceptsBundleAtSizeLimit(t *testing.T) {
+	blob, err := os.ReadFile("testdata/valid-bundle.json")
+	require.NoError(t, err)
+
+	t.Cleanup(func() { MaxBundleSize = 10 << 20 })
+	// Exactly at the cap: the boundary must not be rejected.
+	MaxBundleSize = int64(len(blob))
+
+	ref, ro := serveBundleReferrer(t, []v1.Descriptor{bundleLayerDescriptor(t, blob)}, blob)
+
+	bundles, hash, err := DoBundleFromName(t.Context(), ref, ro)
+	require.NoError(t, err)
+	require.Len(t, bundles, 1)
+	assert.NotNil(t, hash)
+}
+
+func TestBundleReadLimit(t *testing.T) {
+	t.Cleanup(func() { MaxBundleSize = 10 << 20 })
+
+	MaxBundleSize = 4096
+	assert.Equal(t, int64(4097), bundleReadLimit(),
+		"the probe reads one byte past the cap")
+
+	// Adding one here would wrap to a negative limit, which io.LimitReader
+	// treats as immediate EOF.
+	MaxBundleSize = math.MaxInt64
+	assert.Equal(t, int64(math.MaxInt64), bundleReadLimit())
+	assert.Positive(t, bundleReadLimit(), "the read limit must never wrap negative")
+}
+
+func TestDoBundleFromNameAcceptsMaxInt64Limit(t *testing.T) {
+	blob, err := os.ReadFile("testdata/valid-bundle.json")
+	require.NoError(t, err)
+
+	t.Cleanup(func() { MaxBundleSize = 10 << 20 })
+	// An effectively unlimited cap must still read the layer, not truncate it.
+	MaxBundleSize = math.MaxInt64
+
+	ref, ro := serveBundleReferrer(t, []v1.Descriptor{bundleLayerDescriptor(t, blob)}, blob)
+
+	bundles, hash, err := DoBundleFromName(t.Context(), ref, ro)
+	require.NoError(t, err)
+	require.Len(t, bundles, 1)
+	assert.NotNil(t, hash)
 }

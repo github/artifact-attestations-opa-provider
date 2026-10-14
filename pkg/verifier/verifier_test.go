@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/in-toto/attestation/go/v1"
@@ -294,4 +295,54 @@ func TestBundleSubjects(t *testing.T) {
 		require.Len(t, subjects, 6)
 		assert.Contains(t, subjects[5], "and 2 more subjects")
 	})
+}
+
+func TestValidTrustDomain(t *testing.T) {
+	valid := []string{
+		"example",
+		"EXAMPLE",
+		"example123",
+		"12345",
+		"my-domain",
+		"my-trust-domain",
+		"a",
+		"dotcom",
+		strings.Repeat("a", maxTrustDomainLen),
+	}
+	for _, td := range valid {
+		t.Run("valid/"+td, func(t *testing.T) {
+			assert.True(t, validTrustDomain(td))
+		})
+	}
+
+	invalid := map[string]string{
+		"empty":           "",
+		"too long":        strings.Repeat("a", maxTrustDomainLen+1),
+		"leading hyphen":  "-example",
+		"trailing hyphen": "example-",
+		"only hyphen":     "-",
+		// A dot would add a label to the target name.
+		"dot":        "my.domain",
+		"underscore": "my_domain",
+		"space":      "my domain",
+		// Separators that could redirect the TUF target lookup.
+		"slash":         "my/domain",
+		"backslash":     `my\domain`,
+		"parent dir":    "..",
+		"special chars": "my@domain!",
+		"non-ascii":     "domäin",
+		"null byte":     "a\x00b",
+	}
+	for name, td := range invalid {
+		t.Run("invalid/"+name, func(t *testing.T) {
+			assert.False(t, validTrustDomain(td))
+		})
+	}
+}
+
+func TestGHVerifierRejectsInvalidTrustDomain(t *testing.T) {
+	v, err := GHVerifier("../evil")
+	require.Error(t, err)
+	assert.Nil(t, v)
+	assert.Contains(t, err.Error(), "invalid trust domain")
 }
