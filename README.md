@@ -291,6 +291,9 @@ The metrics exposed beyond the default Prometheus metrics are:
 * `aaop_keychain_refresh_fail`: the total number of background keychain
   refreshes that did not fully rebuild the keychain (a failed or degraded
   rebuild), so the previous keychain was retained.
+* `aaop_ca_bundle_refresh_fail`: the total number of failed background CA
+  bundle refresh attempts, including per-update timeouts. Startup failures
+  and refreshes interrupted by application shutdown are not counted.
 * `aaop_config_info`: a gauge whose value is always `1`, exposing the
   effective fetch configuration as labels (`bundle_timeout`,
   `bundle_max_attempts`, `bundle_delay`, `retry_throttled`) so the

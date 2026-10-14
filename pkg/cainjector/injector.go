@@ -18,6 +18,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+
+	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 )
 
 const caBundleUpdateTimeout = 30 * time.Second
@@ -60,6 +62,7 @@ func refreshLoop(ctx context.Context, tick <-chan time.Time, update func(context
 				if ctx.Err() != nil {
 					return
 				}
+				metrics.CABundleRefreshFail.Inc()
 				slog.Error("failed to refresh CA bundle", "error", err)
 			}
 		}

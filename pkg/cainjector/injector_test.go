@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/open-policy-agent/frameworks/constraint/pkg/apis/externaldata/v1beta1"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -25,6 +26,8 @@ import (
 	"k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+
+	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 )
 
 func loadTestCert(t *testing.T, name string) []byte {
@@ -194,6 +197,7 @@ func TestStartTimesOutStalledRequests(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodPut} {
 		t.Run(method, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
+				failBefore := testutil.ToFloat64(metrics.CABundleRefreshFail)
 				caPath := filepath.Join(t.TempDir(), "ca.crt")
 				require.NoError(t, os.WriteFile(caPath, loadTestCert(t, "valid1"), 0600))
 
@@ -214,6 +218,7 @@ func TestStartTimesOutStalledRequests(t *testing.T) {
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 				require.Equal(t, 30*time.Second, time.Since(started))
 				require.NoError(t, t.Context().Err())
+				require.InDelta(t, failBefore, testutil.ToFloat64(metrics.CABundleRefreshFail), 0.0001)
 			})
 		})
 	}
@@ -221,6 +226,7 @@ func TestStartTimesOutStalledRequests(t *testing.T) {
 
 func TestStartRetriesAfterTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		failBefore := testutil.ToFloat64(metrics.CABundleRefreshFail)
 		valid := loadTestCert(t, "valid1")
 		caPath := filepath.Join(t.TempDir(), "ca.crt")
 		require.NoError(t, os.WriteFile(caPath, valid, 0600))
@@ -259,6 +265,7 @@ func TestStartRetriesAfterTimeout(t *testing.T) {
 		synctest.Wait()
 		require.ErrorIs(t, timedOutRequest.Err(), context.DeadlineExceeded)
 		require.NoError(t, ctx.Err())
+		require.InDelta(t, failBefore+1, testutil.ToFloat64(metrics.CABundleRefreshFail), 0.0001)
 
 		time.Sleep(time.Hour - 30*time.Second)
 		synctest.Wait()
@@ -267,6 +274,7 @@ func TestStartRetriesAfterTimeout(t *testing.T) {
 		require.NoError(t, ctx.Err())
 		require.ErrorIs(t, initialRequest.Err(), context.Canceled)
 		require.ErrorIs(t, retriedRequest.Err(), context.Canceled)
+		require.InDelta(t, failBefore+1, testutil.ToFloat64(metrics.CABundleRefreshFail), 0.0001)
 	})
 }
 
@@ -306,6 +314,7 @@ func TestStartHonorsParentDeadline(t *testing.T) {
 }
 
 func TestRefreshLoopRetriesAfterFailure(t *testing.T) {
+	failBefore := testutil.ToFloat64(metrics.CABundleRefreshFail)
 	ctx, cancel := context.WithCancel(t.Context())
 	tick := make(chan time.Time)
 	updated := make(chan struct{})
@@ -337,6 +346,31 @@ func TestRefreshLoopRetriesAfterFailure(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("refresh loop did not stop after context cancellation")
 	}
+	require.InDelta(t, failBefore+1, testutil.ToFloat64(metrics.CABundleRefreshFail), 0.0001)
+}
+
+func TestRefreshLoopDoesNotCountShutdown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		failBefore := testutil.ToFloat64(metrics.CABundleRefreshFail)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		tick := make(chan time.Time)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			refreshLoop(ctx, tick, func(ctx context.Context) error {
+				<-ctx.Done()
+				return ctx.Err()
+			})
+		}()
+
+		tick <- time.Time{}
+		synctest.Wait()
+		cancel()
+		<-done
+		require.InDelta(t, failBefore, testutil.ToFloat64(metrics.CABundleRefreshFail), 0.0001)
+	})
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
