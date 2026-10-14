@@ -18,7 +18,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+
+	"github.com/github/artifact-attestations-opa-provider/pkg/metrics"
 )
+
+const caBundleUpdateTimeout = 30 * time.Second
 
 var propagationDelay = 10 * time.Second
 
@@ -29,16 +33,20 @@ func Start(ctx context.Context, k8sClient dynamic.Interface, bundlePath string, 
 		return errors.New("CA bundle refresh interval must be greater than zero")
 	}
 
-	if err := UpdateCABundle(ctx, k8sClient, bundlePath); err != nil {
+	update := func(ctx context.Context) error {
+		updateCtx, cancel := context.WithTimeout(ctx, caBundleUpdateTimeout)
+		defer cancel()
+		return UpdateCABundle(updateCtx, k8sClient, bundlePath)
+	}
+
+	if err := update(ctx); err != nil {
 		return err
 	}
 
 	ticker := time.NewTicker(refreshInterval)
 	go func() {
 		defer ticker.Stop()
-		refreshLoop(ctx, ticker.C, func(ctx context.Context) error {
-			return UpdateCABundle(ctx, k8sClient, bundlePath)
-		})
+		refreshLoop(ctx, ticker.C, update)
 	}()
 
 	return nil
@@ -54,6 +62,7 @@ func refreshLoop(ctx context.Context, tick <-chan time.Time, update func(context
 				if ctx.Err() != nil {
 					return
 				}
+				metrics.CABundleRefreshFail.Inc()
 				slog.Error("failed to refresh CA bundle", "error", err)
 			}
 		}
