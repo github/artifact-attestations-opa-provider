@@ -31,6 +31,10 @@ const (
 	// logging bundle contents. Bundles are attacker-controlled, so
 	// we bound this to prevent log amplification.
 	maxBundleSubjects = 5
+
+	// maxTrustDomainLen bounds a trust domain at the length of a single DNS
+	// label, matching the grammar enforced by validTrustDomain.
+	maxTrustDomainLen = 63
 )
 
 //go:embed embed/tuf-repo.github.com/root.json
@@ -89,6 +93,9 @@ func GHVerifier(td string) (*Verifier, error) {
 	if td == "" || td == "dotcom" {
 		target = defaultTR
 	} else {
+		if !validTrustDomain(td) {
+			return nil, fmt.Errorf("invalid trust domain: %q", td)
+		}
 		target = fmt.Sprintf("%s.%s", td, defaultTR)
 	}
 
@@ -97,6 +104,36 @@ func GHVerifier(td string) (*Verifier, error) {
 		target,
 		vo,
 	)
+}
+
+// validTrustDomain reports whether td is safe to interpolate into a TUF target
+// name. The trust domain is operator-supplied and becomes part of the
+// "<td>.trusted_root.json" target fetched from the TUF repository, so it is
+// restricted to the DNS-label grammar: ASCII alphanumerics plus interior
+// hyphens, up to maxTrustDomainLen characters. That excludes separators such as
+// ".", "/" and "\" which would otherwise let a malformed value resolve to a
+// different target than the one intended.
+func validTrustDomain(td string) bool {
+	if len(td) == 0 || len(td) > maxTrustDomainLen {
+		return false
+	}
+
+	for i := range len(td) {
+		// Compare bytes rather than runes: every character in the permitted
+		// grammar is single-byte ASCII, so any multi-byte rune is rejected by
+		// falling through to the default case.
+		c := td[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+			continue
+		case c == '-' && i > 0 && i < len(td)-1:
+			continue
+		default:
+			return false
+		}
+	}
+
+	return true
 }
 
 // Verify iterates of the provided bundles and returns a set of verification
