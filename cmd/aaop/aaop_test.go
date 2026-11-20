@@ -230,3 +230,23 @@ func TestConfigureRegistryPoolRejectsNegative(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigureBundleLimits(t *testing.T) {
+	orig := fetcher.MaxBundleSize
+	t.Cleanup(func() { fetcher.MaxBundleSize = orig })
+
+	require.NoError(t, configureBundleLimits(4096))
+	assert.Equal(t, int64(4096), fetcher.MaxBundleSize)
+}
+
+func TestConfigureBundleLimitsRejectsNonPositive(t *testing.T) {
+	orig := fetcher.MaxBundleSize
+	t.Cleanup(func() { fetcher.MaxBundleSize = orig })
+
+	for _, size := range []int64{0, -1} {
+		err := configureBundleLimits(size)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "bundle-max-size")
+		assert.Equal(t, orig, fetcher.MaxBundleSize, "invalid input must not be applied")
+	}
+}
